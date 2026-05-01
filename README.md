@@ -99,11 +99,47 @@ metagpt-models    # models currently loaded in LM Studio
 
 To permanently change the default model, edit `MODEL_IDS` and the `MODEL_ALIAS` default in `bin/metagpt-run` and the `MODEL_IDS` dict in `app.py`.
 
+### Required config files
+
+Both files must exist in `~/.metagpt/` before starting the container:
+
+**`~/.metagpt/config2.yaml`** — LLM and execution settings:
+```yaml
+llm:
+  api_type: "openai"
+  base_url: "http://localhost:1234/v1"
+  api_key: "lm-studio"
+  model: "openai/google/gemma-4-26b-a4b"
+  use_system_prompt: true
+
+code_execution:
+  backend: "docker"
+  image: "python:3.11-slim"
+  timeout: 600
+
+mermaid:
+  engine: "nodejs"
+  path: "mmdc"
+  puppeteer_config: "/root/.metagpt/puppeteer-config.json"
+```
+
+**`~/.metagpt/puppeteer-config.json`** — required by the Mermaid diagram renderer (nodejs/mmdc) running inside the container. Without this file MetaGPT logs a warning for every diagram it tries to generate:
+```json
+{
+    "args": ["--no-sandbox", "--disable-setuid-sandbox"]
+}
+```
+
+The `--no-sandbox` flags are necessary because mmdc runs inside Docker where the default sandbox is unavailable.
+
+The entire `~/.metagpt/` directory is bind-mounted into the container as `/root/.metagpt/`, so both files are visible to MetaGPT automatically.
+
 ## Container
 
 The MetaGPT Docker container (`metagpt/metagpt:latest`) runs persistently with:
 - `--net=host` so it can reach LM Studio on `localhost:1234`
 - `--privileged` so it can spawn `python:3.11-slim` containers for code execution
-- `~/.metagpt/config2.yaml` and `~/sw/metagpt-workspace` bind-mounted
+- `~/.metagpt/` bind-mounted as `/root/.metagpt/` (config + puppeteer config)
+- `~/sw/metagpt-workspace/` bind-mounted for project output
 
 All CLI and UI commands auto-start the container if it isn't running.
