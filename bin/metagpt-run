@@ -21,7 +21,8 @@ CONTAINER_NAME="metagpt"
 WORKSPACE_HOST="${HOME}/sw/metagpt-workspace"
 WORKSPACE_CTR="/app/metagpt/workspace"
 CONFIG_HOST="${HOME}/.metagpt/config2.yaml"
-CONFIG_CTR="/app/metagpt/config/config2.yaml"
+METAGPT_DIR_HOST="${HOME}/.metagpt"
+METAGPT_DIR_CTR="/root/.metagpt"
 CONFIG_LOCK="${HOME}/.metagpt/.run.lock"
 IMAGE="metagpt/metagpt:latest"
 
@@ -120,7 +121,7 @@ ensure_container() {
         docker run --name "${CONTAINER_NAME}" -d \
             --net=host \
             --privileged \
-            -v "${CONFIG_HOST}:${CONFIG_CTR}" \
+            -v "${METAGPT_DIR_HOST}:${METAGPT_DIR_CTR}" \
             -v "${WORKSPACE_HOST}:${WORKSPACE_CTR}" \
             "${IMAGE}"
     fi

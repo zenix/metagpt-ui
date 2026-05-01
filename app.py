@@ -16,7 +16,8 @@ CONTAINER_NAME = "metagpt"
 WORKSPACE_HOST = Path.home() / "sw" / "metagpt-workspace"
 WORKSPACE_CTR = "/app/metagpt/workspace"
 CONFIG_HOST = Path.home() / ".metagpt" / "config2.yaml"
-CONFIG_CTR = "/app/metagpt/config/config2.yaml"
+METAGPT_DIR_HOST = Path.home() / ".metagpt"
+METAGPT_DIR_CTR = "/root/.metagpt"
 IMAGE = "metagpt/metagpt:latest"
 
 MODEL_IDS = {
@@ -102,7 +103,7 @@ async def container_start():
         subprocess.run([
             "docker", "run", "--name", CONTAINER_NAME, "-d",
             "--net=host", "--privileged",
-            "-v", f"{CONFIG_HOST}:{CONFIG_CTR}",
+            "-v", f"{METAGPT_DIR_HOST}:{METAGPT_DIR_CTR}",
             "-v", f"{WORKSPACE_HOST}:{WORKSPACE_CTR}",
             IMAGE,
         ], check=True)
@@ -229,7 +230,7 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, queue: asyn
                 subprocess.run([
                     "docker", "run", "--name", CONTAINER_NAME, "-d",
                     "--net=host", "--privileged",
-                    "-v", f"{CONFIG_HOST}:{CONFIG_CTR}",
+                    "-v", f"{METAGPT_DIR_HOST}:{METAGPT_DIR_CTR}",
                     "-v", f"{WORKSPACE_HOST}:{WORKSPACE_CTR}",
                     IMAGE,
                 ], check=True)
