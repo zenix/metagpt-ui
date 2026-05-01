@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MetaGPT Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d2e;
+    --surface2: #22263a;
+    --border: #2e3250;
+    --accent: #6c8aff;
+    --accent2: #a78bfa;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e8f0;
+    --muted: #8892a4;
+    --font: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 15px; font-weight: 600; color: var(--accent); flex: 1; }
+  .badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    font-size: 11px;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--red);
+    transition: background 0.3s;
+  }
+  .dot.running { background: var(--green); }
+  .btn {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: 12px;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn:hover { background: var(--border); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: #5a78ee; }
+  .btn.danger { background: transparent; border-color: var(--red); color: var(--red); }
+  .btn.danger:hover { background: rgba(248,113,113,0.1); }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Main layout */
+  main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* Left panel — project list */
+  .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+  }
+  .sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .project-list {
+    overflow-y: auto;
+    flex: 1;
+  }
+  .project-item {
+    padding: 10px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+  }
+  .project-item:hover { background: var(--surface2); }
+  .project-item.selected { background: var(--surface2); border-left: 3px solid var(--accent); }
+  .project-item .pname {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .project-item .pmeta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tag {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    margin-left: 4px;
+  }
+  .tag.inc { background: rgba(167,139,250,0.2); color: var(--accent2); }
+
+  /* Right panel */
+  .content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .form-area {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .form-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    margin-bottom: 10px;
+  }
+  .form-row:last-child { margin-bottom: 0; }
+  label { font-size: 11px; color: var(--muted); display: block; margin-bottom: 4px; }
+  .field { display: flex; flex-direction: column; }
+  textarea, input, select {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    padding: 7px 10px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  textarea:focus, input:focus, select:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 64px; }
+  select option { background: var(--surface2); }
+
+  .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .selected-label {
+    font-size: 11px;
+    color: var(--muted);
+    padding: 4px 8px;
+    background: var(--surface2);
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+  .selected-label span { color: var(--accent2); }
+
+  /* Log output */
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    flex-shrink: 0;
+  }
+  .log-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .log-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .log-dot.active {
+    background: var(--green);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+  .log-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #c9d1e0;
+  }
+  .log-output .line-meta { color: var(--accent); }
+  .log-output .line-err  { color: var(--red); }
+  .log-output .line-ok   { color: var(--green); }
+  .log-output .line-warn { color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>MetaGPT Dashboard</h1>
+  <div class="badge">
+    <div class="dot" id="containerDot"></div>
+    <span id="containerStatus">checking...</span>
+  </div>
+  <button class="btn" id="btnStart" onclick="containerAction('start')">Start</button>
+  <button class="btn danger" id="btnStop" onclick="containerAction('stop')">Stop</button>
+</header>
+
+<main>
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      Projects
+      <button class="btn" onclick="loadProjects()" style="padding:2px 8px;font-size:10px;">↺</button>
+    </div>
+    <div class="project-list" id="projectList">
+      <div style="padding:12px;color:var(--muted)">Loading...</div>
+    </div>
+  </aside>
+
+  <div class="content">
+    <div class="form-area">
+      <div class="form-row">
+        <div class="field" style="flex:1">
+          <label>Prompt / Idea</label>
+          <textarea id="ideaInput" placeholder="Write a CLI snake game with color support..."></textarea>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label>Project Name</label>
+          <input id="projectName" type="text" placeholder="auto-derived" style="width:180px">
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <select id="modelSelect">
+            <option value="heavy">heavy (26B)</option>
+            <option value="fast">fast (E4B)</option>
+            <option value="gemma3">gemma3 (27B)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Rounds</label>
+          <input id="roundsInput" type="number" value="5" min="1" max="20" style="width:70px">
+        </div>
+        <div class="field" style="justify-content:flex-end">
+          <label>&nbsp;</label>
+          <div style="display:flex;gap:6px;align-items:center">
+            <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer">
+              <input type="checkbox" id="codeReview" checked> review
+            </label>
+            <label style="display:flex;align-items:center;gap:4px;margin:0;cursor:pointer">
+              <input type="checkbox" id="runTests"> tests
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="form-row actions">
+        <button class="btn primary" onclick="runMetaGPT(false)" id="btnNew">+ New Project</button>
+        <button class="btn" onclick="runMetaGPT(true)" id="btnInc" disabled>▶ Run Incremental</button>
+        <div class="selected-label" id="selectedLabel" style="display:none">
+          Selected: <span id="selectedName"></span>
+        </div>
+        <button class="btn" onclick="clearSelection()" id="btnClear" style="display:none">✕ clear</button>
+      </div>
+    </div>
+
+    <div class="log-header">
+      <span>Live Output</span>
+      <div class="log-status">
+        <div class="log-dot" id="logDot"></div>
+        <span id="logStatusText">idle</span>
+        <button class="btn" onclick="clearLog()" style="padding:2px 8px;font-size:10px;margin-left:8px">clear</button>
+      </div>
+    </div>
+    <div class="log-output" id="logOutput">Ready. Select a project or enter a new idea above.\n</div>
+  </div>
+</main>
+
+<script>
+let selectedProject = null;
+let currentES = null;
+
+// ── Container ─────────────────────────────────────────────────────────────────
+
+async function pollContainer() {
+  try {
+    const r = await fetch('/api/container');
+    const data = await r.json();
+    const dot = document.getElementById('containerDot');
+    const status = document.getElementById('containerStatus');
+    dot.className = 'dot' + (data.running ? ' running' : '');
+    status.textContent = data.status;
+    document.getElementById('btnStart').disabled = data.running;
+    document.getElementById('btnStop').disabled = !data.running;
+  } catch (e) {
+    document.getElementById('containerStatus').textContent = 'unreachable';
+  }
+}
+
+async function containerAction(action) {
+  appendLog(`[ui] Container ${action}...\n`, 'meta');
+  await fetch(`/api/container/${action}`, { method: 'POST' });
+  await pollContainer();
+}
+
+// ── Projects ──────────────────────────────────────────────────────────────────
+
+async function loadProjects() {
+  const list = document.getElementById('projectList');
+  list.innerHTML = '<div style="padding:12px;color:var(--muted)">Loading...</div>';
+  const r = await fetch('/api/projects');
+  const projects = await r.json();
+  if (!projects.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--muted)">No projects yet.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const p of projects) {
+    const item = document.createElement('div');
+    item.className = 'project-item' + (selectedProject === p.name ? ' selected' : '');
+    item.dataset.name = p.name;
+    const date = new Date(p.modified * 1000).toLocaleDateString();
+    const incTag = p.incremental ? '<span class="tag inc">inc</span>' : '';
+    item.innerHTML = `
+      <div class="pname">${p.name}${incTag}</div>
+      <div class="pmeta">${date} · ${p.file_count} files${p.snippet ? ' · ' + escHtml(p.snippet.slice(0, 40)) : ''}</div>
+    `;
+    item.onclick = () => selectProject(p.name);
+    list.appendChild(item);
+  }
+}
+
+function selectProject(name) {
+  selectedProject = name;
+  document.getElementById('projectName').value = name;
+  document.getElementById('selectedName').textContent = name;
+  document.getElementById('selectedLabel').style.display = '';
+  document.getElementById('btnClear').style.display = '';
+  document.getElementById('btnInc').disabled = false;
+  document.querySelectorAll('.project-item').forEach(el => {
+    el.classList.toggle('selected', el.dataset.name === name);
+  });
+}
+
+function clearSelection() {
+  selectedProject = null;
+  document.getElementById('projectName').value = '';
+  document.getElementById('selectedLabel').style.display = 'none';
+  document.getElementById('btnClear').style.display = 'none';
+  document.getElementById('btnInc').disabled = true;
+  document.querySelectorAll('.project-item').forEach(el => el.classList.remove('selected'));
+}
+
+// ── Run ───────────────────────────────────────────────────────────────────────
+
+async function runMetaGPT(incremental) {
+  const idea = document.getElementById('ideaInput').value.trim();
+  if (!idea) { appendLog('[ui] Enter a prompt first.\n', 'err'); return; }
+
+  const project = document.getElementById('projectName').value.trim();
+  const model = document.getElementById('modelSelect').value;
+  const rounds = parseInt(document.getElementById('roundsInput').value) || 5;
+  const codeReview = document.getElementById('codeReview').checked;
+  const runTests = document.getElementById('runTests').checked;
+
+  if (incremental && !selectedProject && !project) {
+    appendLog('[ui] Select a project for incremental mode.\n', 'err');
+    return;
+  }
+
+  clearLog();
+  setRunning(true);
+
+  const body = { idea, project: project || selectedProject || '', model, rounds, code_review: codeReview, run_tests: runTests };
+  const r = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) {
+    const err = await r.text();
+    appendLog(`[ui] Failed to start run: ${err}\n`, 'err');
+    setRunning(false);
+    return;
+  }
+  const { run_id, project: resolvedProject } = await r.json();
+  appendLog(`[ui] Run started → project: ${resolvedProject}\n`, 'meta');
+
+  if (currentES) currentES.close();
+  currentES = new EventSource(`/api/stream/${run_id}`);
+  currentES.onmessage = (e) => {
+    if (e.data === '[DONE]') {
+      setRunning(false);
+      currentES.close();
+      loadProjects();
+      return;
+    }
+    appendLog(e.data + '\n');
+  };
+  currentES.onerror = () => {
+    appendLog('[ui] Stream connection lost.\n', 'err');
+    setRunning(false);
+    currentES.close();
+  };
+}
+
+// ── Log helpers ───────────────────────────────────────────────────────────────
+
+function appendLog(text, cls) {
+  const out = document.getElementById('logOutput');
+  const span = document.createElement('span');
+  if (cls) span.className = `line-${cls}`;
+  span.textContent = text;
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+
+function clearLog() {
+  document.getElementById('logOutput').textContent = '';
+}
+
+function setRunning(active) {
+  const dot = document.getElementById('logDot');
+  dot.className = 'log-dot' + (active ? ' active' : '');
+  document.getElementById('logStatusText').textContent = active ? 'running...' : 'idle';
+  document.getElementById('btnNew').disabled = active;
+  document.getElementById('btnInc').disabled = active || !selectedProject;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+
+pollContainer();
+setInterval(pollContainer, 5000);
+loadProjects();
+</script>
+</body>
+</html>

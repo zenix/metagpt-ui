@@ -1,0 +1,219 @@
+#!/usr/bin/env bash
+# metagpt-run — Run MetaGPT tasks against a local LM Studio endpoint.
+#
+# Usage:
+#   metagpt-run [OPTIONS] "Your idea here"
+#
+# Options:
+#   -p, --project NAME      Project name / subdirectory (creates or targets existing)
+#   -m, --model MODEL       Model alias: fast | heavy | gemma3 (default: heavy)
+#   -r, --rounds N          Number of agent rounds (default: 5)
+#   --no-review             Disable code review pass
+#   --with-tests            Enable QA / test generation
+#   --stop-after            Stop container after task completes
+#   --dry-run               Print the docker exec command without running it
+#   -l, --list              List existing projects in workspace
+#   -h, --help              Show this help
+
+set -euo pipefail
+
+CONTAINER_NAME="metagpt"
+WORKSPACE_HOST="${HOME}/sw/metagpt-workspace"
+WORKSPACE_CTR="/app/metagpt/workspace"
+CONFIG_HOST="${HOME}/.metagpt/config2.yaml"
+CONFIG_CTR="/app/metagpt/config/config2.yaml"
+CONFIG_LOCK="${HOME}/.metagpt/.run.lock"
+IMAGE="metagpt/metagpt:latest"
+
+declare -A MODEL_IDS=(
+    [heavy]="openai/google/gemma-4-26b-a4b"
+    [fast]="openai/google/gemma-4-e4b-it"
+    [gemma3]="google/gemma-3-27b-it-qat"
+)
+
+die()   { echo "[metagpt-run] ERROR: $*" >&2; exit 1; }
+info()  { echo "[metagpt-run] $*"; }
+usage() {
+    grep '^#' "$0" | grep -v '^#!/' | sed 's/^# \{0,1\}//'
+    exit 0
+}
+
+PROJECT=""
+MODEL_ALIAS="heavy"
+ROUNDS=5
+CODE_REVIEW="--code-review"
+RUN_TESTS=""
+STOP_AFTER=false
+DRY_RUN=false
+LIST_MODE=false
+IDEA=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -p|--project)    PROJECT="$2";       shift 2 ;;
+        -m|--model)      MODEL_ALIAS="$2";   shift 2 ;;
+        -r|--rounds)     ROUNDS="$2";        shift 2 ;;
+        --no-review)     CODE_REVIEW="--no-code-review"; shift ;;
+        --with-tests)    RUN_TESTS="--run-tests"; shift ;;
+        --stop-after)    STOP_AFTER=true;    shift ;;
+        --dry-run)       DRY_RUN=true;       shift ;;
+        -l|--list)       LIST_MODE=true;     shift ;;
+        -h|--help)       usage ;;
+        -*)              die "Unknown option: $1" ;;
+        *)               IDEA="$1";          shift ;;
+    esac
+done
+
+if $LIST_MODE; then
+    info "Projects in ${WORKSPACE_HOST}:"
+    if [[ ! -d "${WORKSPACE_HOST}" ]]; then
+        echo "  (workspace directory not found)"
+        exit 0
+    fi
+    for d in "${WORKSPACE_HOST}"/*/; do
+        [[ -d "$d" ]] || continue
+        name=$(basename "$d")
+        req_file="${d}docs/requirement.txt"
+        if [[ -f "$req_file" && -s "$req_file" ]]; then
+            req=$(head -1 "$req_file" | cut -c1-70)
+            printf "  %-25s  %s\n" "$name" "$req"
+        else
+            printf "  %-25s\n" "$name"
+        fi
+    done
+    exit 0
+fi
+
+[[ -z "$IDEA" ]] && die "No idea/prompt provided. Use: metagpt-run [OPTIONS] \"Your idea\""
+
+if [[ -z "${MODEL_IDS[$MODEL_ALIAS]+_}" ]]; then
+    die "Unknown model alias '${MODEL_ALIAS}'. Available: ${!MODEL_IDS[*]}"
+fi
+MODEL_ID="${MODEL_IDS[$MODEL_ALIAS]}"
+
+if [[ -z "$PROJECT" ]]; then
+    PROJECT=$(echo "$IDEA" | tr '[:upper:]' '[:lower:]' | \
+              grep -oP '\w+' | head -4 | tr '\n' '_' | sed 's/_$//')
+    info "Auto-derived project name: ${PROJECT}"
+fi
+
+container_running() {
+    docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -q '^true$'
+}
+
+container_exists() {
+    docker inspect "${CONTAINER_NAME}" &>/dev/null
+}
+
+ensure_container() {
+    if container_running; then
+        info "Container '${CONTAINER_NAME}' is already running."
+        return
+    fi
+
+    if container_exists; then
+        info "Container '${CONTAINER_NAME}' exists but is stopped — starting it."
+        docker start "${CONTAINER_NAME}"
+    else
+        info "Container '${CONTAINER_NAME}' not found — creating it."
+        mkdir -p "${WORKSPACE_HOST}"
+        docker run --name "${CONTAINER_NAME}" -d \
+            --net=host \
+            --privileged \
+            -v "${CONFIG_HOST}:${CONFIG_CTR}" \
+            -v "${WORKSPACE_HOST}:${WORKSPACE_CTR}" \
+            "${IMAGE}"
+    fi
+
+    local retries=0
+    until container_running || (( retries++ >= 10 )); do
+        sleep 1
+    done
+    container_running || die "Container failed to reach running state."
+}
+
+write_config() {
+    local model_id="$1"
+    cat > "${CONFIG_HOST}" <<YAML
+llm:
+  api_type: "openai"
+  base_url: "http://localhost:1234/v1"
+  api_key: "lm-studio"
+  model: "${model_id}"
+  use_system_prompt: true
+
+code_execution:
+  backend: "docker"
+  image: "python:3.11-slim"
+  timeout: 600
+
+mermaid:
+  engine: "nodejs"
+  path: "mmdc"
+  puppeteer_config: "/root/.metagpt/puppeteer-config.json"
+YAML
+}
+
+acquire_lock() {
+    exec 9>"${CONFIG_LOCK}"
+    flock -x 9
+}
+
+release_lock() {
+    exec 9>&-
+}
+
+PROJECT_PATH_CTR="${WORKSPACE_CTR}/${PROJECT}"
+PROJECT_HOST_PATH="${WORKSPACE_HOST}/${PROJECT}"
+
+METAGPT_CMD="metagpt"
+METAGPT_CMD+=" --project-name ${PROJECT}"
+METAGPT_CMD+=" --n-round ${ROUNDS}"
+METAGPT_CMD+=" ${CODE_REVIEW}"
+[[ -n "$RUN_TESTS" ]] && METAGPT_CMD+=" ${RUN_TESTS}"
+
+if [[ -d "${PROJECT_HOST_PATH}" && -f "${PROJECT_HOST_PATH}/.dependencies.json" ]]; then
+    info "Existing project found — running in incremental (modify) mode."
+    METAGPT_CMD+=" --project-path ${PROJECT_PATH_CTR}"
+else
+    info "New project — running in fresh mode."
+fi
+
+METAGPT_CMD+=" \"${IDEA}\""
+
+if $DRY_RUN; then
+    echo "[DRY RUN] Model:   ${MODEL_ALIAS} (${MODEL_ID})"
+    echo "[DRY RUN] Project: ${PROJECT}"
+    echo "[DRY RUN] docker exec -t ${CONTAINER_NAME} bash -c '${METAGPT_CMD}'"
+    exit 0
+fi
+
+acquire_lock
+
+CONFIG_BACKUP=$(cat "${CONFIG_HOST}")
+restore_config() {
+    echo "${CONFIG_BACKUP}" > "${CONFIG_HOST}"
+    release_lock
+}
+trap restore_config EXIT INT TERM
+
+info "Setting model to: ${MODEL_ALIAS} (${MODEL_ID})"
+write_config "${MODEL_ID}"
+
+ensure_container
+
+info "Starting MetaGPT run..."
+info "Project:   ${PROJECT}"
+info "Workspace: ${PROJECT_HOST_PATH}"
+echo ""
+
+docker exec -t "${CONTAINER_NAME}" bash -c "${METAGPT_CMD}"
+EXIT_CODE=$?
+
+if $STOP_AFTER; then
+    info "Stopping container (--stop-after requested)."
+    docker stop "${CONTAINER_NAME}"
+fi
+
+[[ $EXIT_CODE -eq 0 ]] && info "Done. Output in: ${PROJECT_HOST_PATH}" \
+                        || die "MetaGPT exited with code ${EXIT_CODE}"

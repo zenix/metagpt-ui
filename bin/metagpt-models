@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# metagpt-models — Query LM Studio for loaded models and display aliases.
+set -euo pipefail
+
+LM_STUDIO_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}"
+
+echo "=== Models loaded in LM Studio ==="
+response=$(curl -sf "${LM_STUDIO_URL}/models" 2>/dev/null) \
+    || { echo "  LM Studio not reachable at ${LM_STUDIO_URL}"; exit 1; }
+
+echo "$response" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+models = data.get('data', [])
+aliases = {
+    'gemma-4-26b-a4b': 'heavy',
+    'gemma-4-e4b-it':  'fast',
+    'gemma-3-27b-it-qat': 'gemma3',
+}
+for m in models:
+    mid = m['id']
+    alias = next((v for k, v in aliases.items() if k.lower() in mid.lower()), '?')
+    print(f'  {alias:10s}  {mid}')
+if not models:
+    print('  (no models loaded)')
+"
+
+echo ""
+echo "Use with: metagpt-run -m fast \"...\""
+echo "           metagpt-run -m heavy \"...\""
+echo "           metagpt-run -m gemma3 \"...\""

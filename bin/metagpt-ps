@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# metagpt-ps — Show MetaGPT container status and recent project activity.
+set -euo pipefail
+
+CONTAINER_NAME="metagpt"
+WORKSPACE_HOST="${HOME}/sw/metagpt-workspace"
+
+echo "=== Container ==="
+if docker inspect -f '{{.State.Status}}  (started {{.State.StartedAt}})' \
+       "${CONTAINER_NAME}" 2>/dev/null; then
+    :
+else
+    echo "  Not found"
+fi
+
+echo ""
+echo "=== Projects (newest first) ==="
+if [[ -d "${WORKSPACE_HOST}" ]]; then
+    find "${WORKSPACE_HOST}" -mindepth 1 -maxdepth 1 -type d \
+        -printf '%T@ %f\n' 2>/dev/null \
+        | sort -rn \
+        | while IFS=' ' read -r mtime name; do
+            proj_dir="${WORKSPACE_HOST}/${name}"
+            req_file="${proj_dir}/docs/requirement.txt"
+
+            src_count=$(find "${proj_dir}" \( -name "*.py" -o -name "*.js" \
+                             -o -name "*.ts" -o -name "*.html" \) 2>/dev/null | wc -l)
+
+            date_str=$(date -d "@${mtime%.*}" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unknown")
+
+            if [[ -f "$req_file" && -s "$req_file" ]]; then
+                req=$(head -1 "$req_file" | cut -c1-60)
+            else
+                req="(no requirement recorded)"
+            fi
+
+            printf "  %-22s  %s  files:%-3s  \"%s\"\n" \
+                   "${name}" "${date_str}" "${src_count}" "${req}"
+        done
+else
+    echo "  Workspace not found: ${WORKSPACE_HOST}"
+fi
+
+echo ""
+echo "=== Current model (from config) ==="
+grep 'model:' "${HOME}/.metagpt/config2.yaml" 2>/dev/null \
+    | head -1 | sed 's/^[ ]*/  /' || echo "  (config not found)"
