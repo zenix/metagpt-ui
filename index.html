@@ -246,8 +246,10 @@
     <div class="dot" id="containerDot"></div>
     <span id="containerStatus">checking...</span>
   </div>
-  <button class="btn" id="btnStart" onclick="containerAction('start')">Start</button>
-  <button class="btn danger" id="btnStop" onclick="containerAction('stop')">Stop</button>
+  <button class="btn" id="btnStart" onclick="containerAction('start')" title="Start container">Start</button>
+  <button class="btn" id="btnRestart" onclick="containerAction('restart')" title="Restart container">Restart</button>
+  <button class="btn danger" id="btnStop" onclick="containerAction('stop')" title="Stop container">Stop</button>
+  <button class="btn danger" id="btnRemove" onclick="confirmRemove()" title="Stop and remove container">Remove</button>
 </header>
 
 <main>
@@ -334,8 +336,12 @@ async function pollContainer() {
     const status = document.getElementById('containerStatus');
     dot.className = 'dot' + (data.running ? ' running' : '');
     status.textContent = data.status;
-    document.getElementById('btnStart').disabled = data.running;
-    document.getElementById('btnStop').disabled = !data.running;
+    const exists = data.exists;
+    const running = data.running;
+    document.getElementById('btnStart').disabled = running;
+    document.getElementById('btnRestart').disabled = !exists;
+    document.getElementById('btnStop').disabled = !running;
+    document.getElementById('btnRemove').disabled = !exists;
   } catch (e) {
     document.getElementById('containerStatus').textContent = 'unreachable';
   }
@@ -345,6 +351,11 @@ async function containerAction(action) {
   appendLog(`[ui] Container ${action}...\n`, 'meta');
   await fetch(`/api/container/${action}`, { method: 'POST' });
   await pollContainer();
+}
+
+function confirmRemove() {
+  if (!confirm('Stop and remove the MetaGPT container?\n\nThe workspace files will not be deleted. You can start a fresh container afterwards.')) return;
+  containerAction('remove');
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────

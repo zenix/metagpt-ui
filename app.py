@@ -118,6 +118,28 @@ async def container_stop():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/container/restart")
+async def container_restart():
+    try:
+        subprocess.run(["docker", "restart", CONTAINER_NAME], check=True)
+        return {"ok": True}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/container/remove")
+async def container_remove():
+    try:
+        info = _container_status()
+        if info["running"]:
+            subprocess.run(["docker", "stop", CONTAINER_NAME], check=True)
+        if info["exists"]:
+            subprocess.run(["docker", "rm", CONTAINER_NAME], check=True)
+        return {"ok": True}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 class RunRequest(BaseModel):
