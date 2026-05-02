@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ollama-setup-qwen3 — Create a Qwen3:14b model preset in Ollama for MetaGPT use.
+#
+# Sets context length to 32K and disables thinking so MetaGPT gets clean
+# JSON responses without <think> tags.
+#
+# Usage:
+#   bin/ollama-setup-qwen3
+#
+# After running, add to metagpt-ui via the ⚙ models button:
+#   Alias:    qwen3-14b
+#   Model ID: qwen3-14b-metagpt
+
+set -euo pipefail
+
+BASE_MODEL="qwen3:14b"
+MODEL_NAME="qwen3-14b-metagpt"
+PROBE="$(mktemp /tmp/Modelfile.XXXXXX)"
+MODELFILE="$(mktemp /tmp/Modelfile.XXXXXX)"
+
+die()  { echo "[ollama-setup] ERROR: $*" >&2; exit 1; }
+info() { echo "[ollama-setup] $*"; }
+
+# ── Checks ────────────────────────────────────────────────────────────────────
+
+command -v ollama &>/dev/null || die "ollama not found — install from https://ollama.com"
+
+# Start server if not running
+if ! ollama list &>/dev/null 2>&1; then
+    info "Ollama server not running — starting..."
+    ollama serve &>/dev/null &
+    sleep 3
+    ollama list &>/dev/null || die "Failed to start ollama server"
+fi
+
+# Pull base model if missing
+if ! ollama list 2>/dev/null | awk '{print $1}' | grep -qx "${BASE_MODEL}"; then
+    info "Pulling ${BASE_MODEL} (this may take a while)..."
+    ollama pull "${BASE_MODEL}"
+fi
+
+# ── Detect think parameter support ───────────────────────────────────────────
+
+printf 'FROM %s\nPARAMETER think false\n' "${BASE_MODEL}" > "${PROBE}"
+THINK_METHOD="system"
+if ollama create "_probe_think_test" -f "${PROBE}" &>/dev/null 2>&1; then
+    ollama rm "_probe_think_test" &>/dev/null
+    THINK_METHOD="parameter"
+fi
+rm -f "${PROBE}"
+
+if [[ "${THINK_METHOD}" == "parameter" ]]; then
+    info "Using PARAMETER think false (native support)"
+    THINK_LINE="PARAMETER think false"
+else
+    info "Ollama version does not support PARAMETER think — using SYSTEM /no_think instead"
+    info "(upgrade Ollama for more reliable thinking suppression)"
+    THINK_LINE="SYSTEM /no_think"
+fi
+
+# ── Create preset model ───────────────────────────────────────────────────────
+
+cat > "${MODELFILE}" <<EOF
+FROM ${BASE_MODEL}
+
+PARAMETER num_ctx 32768
+${THINK_LINE}
+EOF
+
+info "Creating '${MODEL_NAME}'..."
+ollama create "${MODEL_NAME}" -f "${MODELFILE}"
+rm -f "${MODELFILE}"
+
+# ── Done ─────────────────────────────────────────────────────────────────────
+
+info ""
+info "Done. Model '${MODEL_NAME}' is ready."
+info ""
+info "Add to metagpt-ui via the ⚙ models button:"
+info "  Alias:    qwen3-14b"
+info "  Model ID: ${MODEL_NAME}"
+info ""
+info "Or test directly:  ollama run ${MODEL_NAME}"
