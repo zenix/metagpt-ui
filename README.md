@@ -63,7 +63,7 @@ Opens `http://localhost:8080` automatically. On first run it creates a Python ve
 - Click "View" to replay any historical log in the output pane
 
 **Model management**
-- "Manage" link next to the model selector opens a modal for adding/removing model aliases
+- ⚙ button next to the model selector opens a modal for adding/removing model aliases
 - Aliases are persisted to `~/.metagpt/ui_models.json` and survive restarts
 
 **Container controls**
@@ -122,7 +122,7 @@ Default aliases (fallback if `~/.metagpt/ui_models.json` does not exist):
 | `fast` | gemma-4-E4B | Quick prototypes, simple tasks |
 | `gemma3` | gemma-3-27B-qat | Alternative for comparison |
 
-Custom aliases can be added via the web UI (Model → Manage) or by editing `~/.metagpt/ui_models.json` directly.
+Custom aliases can be added via the ⚙ button next to the model selector in the web UI, or by editing `~/.metagpt/ui_models.json` directly.
 
 ## Configuration
 
