@@ -22,8 +22,10 @@ Local MetaGPT environment backed by [LM Studio](https://lmstudio.ai). Includes a
 ├── index.html            # web frontend
 └── requirements.txt
 
-~/sw/metagpt-workspace/   # generated projects land here
-~/.metagpt/config2.yaml   # LLM + execution config (rewritten per run)
+~/sw/metagpt-workspace/        # generated projects land here
+~/sw/metagpt-workspace/.logs/  # run log history (one file per run)
+~/.metagpt/config2.yaml        # LLM + execution config (rewritten per run)
+~/.metagpt/ui_models.json      # custom model aliases (managed via web UI)
 
 ~/bin/metagpt-*           # symlinks into bin/ above
 ```
@@ -36,12 +38,36 @@ metagpt-ui
 
 Opens `http://localhost:8080` automatically. On first run it creates a Python venv and installs dependencies (~30s).
 
-Features:
-- Project list with file counts and snippets
+### Features
+
+**Running projects**
 - New project and incremental (modify existing) runs
 - Model selector, rounds, code review and test toggles
 - Live log streaming via SSE
-- Container start/stop with live status badge
+- Cancel a running job without stopping the container
+
+**Pipeline visibility**
+- Live pipeline strip: **PM → Architect → ProjMgr → Engineer → QA** — each step lights up as the role becomes active, turns green when done
+- Multi-round support: if `--n-round` is set above 5, additional round columns are appended dynamically as the run cycles
+
+**Project management**
+- Project list with file counts and snippets
+- Delete a project (hover the project row to reveal the `✕` button)
+- Artifacts summary: per-role cards showing PRD, system design, task list, and code plan pulled from `docs/`
+- File browser: two-pane view (file tree + code viewer) with syntax display
+- Mermaid diagram rendering for `.mmd` files and fenced ` ```mermaid ` blocks in `.md` files
+- Download project as ZIP (source files only, or all files)
+
+**Run history**
+- "Logs" tab in the sidebar lists all past runs
+- Click "View" to replay any historical log in the output pane
+
+**Model management**
+- "Manage" link next to the model selector opens a modal for adding/removing model aliases
+- Aliases are persisted to `~/.metagpt/ui_models.json` and survive restarts
+
+**Container controls**
+- Start / Restart / Stop / Remove buttons with live status badge
 
 ## CLI
 
@@ -87,17 +113,20 @@ metagpt-models    # models currently loaded in LM Studio
 
 ## Model aliases
 
+Default aliases (fallback if `~/.metagpt/ui_models.json` does not exist):
+
 | Alias | Model | Use for |
 |-------|-------|---------|
+| `qwen3-14b` | qwen/qwen3-14b | Fast, capable default |
 | `heavy` | gemma-4-26B-A4B | Full software projects, complex tasks |
 | `fast` | gemma-4-E4B | Quick prototypes, simple tasks |
 | `gemma3` | gemma-3-27B-qat | Alternative for comparison |
 
+Custom aliases can be added via the web UI (Model → Manage) or by editing `~/.metagpt/ui_models.json` directly.
+
 ## Configuration
 
 `~/.metagpt/config2.yaml` is rewritten before each run to set the chosen model. The original content is restored on exit (even on Ctrl-C). A lockfile at `~/.metagpt/.run.lock` prevents concurrent runs from racing on the config.
-
-To permanently change the default model, edit `MODEL_IDS` and the `MODEL_ALIAS` default in `bin/metagpt-run` and the `MODEL_IDS` dict in `app.py`.
 
 ### Required config files
 
@@ -109,7 +138,7 @@ llm:
   api_type: "openai"
   base_url: "http://localhost:1234/v1"
   api_key: "lm-studio"
-  model: "openai/google/gemma-4-26b-a4b"
+  model: "openai/qwen/qwen3-14b"
   use_system_prompt: true
 
 code_execution:
@@ -143,3 +172,13 @@ The MetaGPT Docker container (`metagpt/metagpt:latest`) runs persistently with:
 - `~/sw/metagpt-workspace/` bind-mounted for project output
 
 All CLI and UI commands auto-start the container if it isn't running.
+
+## Run logs
+
+Every run is saved to `~/sw/metagpt-workspace/.logs/` as a plain-text file named:
+
+```
+{project}_{run_id[:8]}_{YYYYmmddTHHMMSS}.log
+```
+
+Logs are accessible from the "Logs" tab in the web UI sidebar or by reading the files directly.

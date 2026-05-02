@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MetaGPT Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -99,12 +100,11 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--border);
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--muted);
+    gap: 6px;
+    flex-shrink: 0;
   }
   .project-list {
     overflow-y: auto;
@@ -141,6 +141,8 @@
     margin-left: 4px;
   }
   .tag.inc { background: rgba(167,139,250,0.2); color: var(--accent2); }
+  .del-btn { visibility: hidden; }
+  .project-item:hover .del-btn { visibility: visible; }
 
   /* Right panel */
   .content {
@@ -191,6 +193,28 @@
   }
   .selected-label span { color: var(--accent2); }
 
+  /* Pipeline strip */
+  .pipe-step {
+    padding: 3px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--muted);
+    transition: background 0.3s, color 0.3s, border-color 0.3s;
+    white-space: nowrap;
+  }
+  .pipe-step.active {
+    background: rgba(108,138,255,0.15);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .pipe-step.done {
+    background: rgba(74,222,128,0.1);
+    border-color: var(--green);
+    color: var(--green);
+  }
+  .pipe-arrow { padding: 3px 5px; color: var(--muted); font-size: 11px; }
+
   /* Log output */
   .log-header {
     display: flex;
@@ -236,6 +260,72 @@
   .log-output .line-err  { color: var(--red); }
   .log-output .line-ok   { color: var(--green); }
   .log-output .line-warn { color: var(--yellow); }
+
+  /* File browser */
+  #fileTree {
+    width: 220px;
+    flex-shrink: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 4px 0;
+  }
+  .tree-item {
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+  }
+  .tree-item:hover { background: var(--surface2); color: var(--text); }
+  .tree-item.selected { background: var(--surface2); color: var(--accent); }
+  #fileViewer {
+    flex: 1;
+    overflow: auto;
+    padding: 12px 16px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  #fileViewer pre { white-space: pre-wrap; word-break: break-all; }
+
+  /* Modals */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 100;
+    overflow: auto;
+    padding: 24px;
+  }
+  .modal-box {
+    max-width: 800px;
+    margin: 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .modal-title { font-size: 14px; font-weight: 600; }
+  .summary-card {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  .summary-card-title { font-weight: 600; color: var(--accent2); margin-bottom: 8px; font-size: 12px; }
+  .summary-field-label { color: var(--muted); font-size: 10px; margin-top: 8px; margin-bottom: 2px; }
+  .summary-field-value { white-space: pre-wrap; word-break: break-all; font-size: 11px; line-height: 1.5; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  th { color: var(--muted); font-size: 11px; }
 </style>
 </head>
 <body>
@@ -255,11 +345,23 @@
 <main>
   <aside class="sidebar">
     <div class="sidebar-header">
-      Projects
-      <button class="btn" onclick="loadProjects()" style="padding:2px 8px;font-size:10px;">↺</button>
+      <div style="display:flex;gap:4px">
+        <button id="tabProjects" class="btn primary" onclick="switchSidebarTab('projects')"
+                style="padding:2px 8px;font-size:10px">Projects</button>
+        <button id="tabLogs" class="btn" onclick="switchSidebarTab('logs')"
+                style="padding:2px 8px;font-size:10px">Logs</button>
+      </div>
+      <div style="display:flex;gap:4px;align-items:center">
+        <button class="btn" id="btnSummary" onclick="showSummary()"
+                style="padding:2px 8px;font-size:10px;display:none">summary</button>
+        <button class="btn" onclick="refreshSidebar()" style="padding:2px 8px;font-size:10px">↺</button>
+      </div>
     </div>
     <div class="project-list" id="projectList">
       <div style="padding:12px;color:var(--muted)">Loading...</div>
+    </div>
+    <div class="project-list" id="logList" style="display:none">
+      <div style="padding:12px;color:var(--muted)">No logs yet.</div>
     </div>
   </aside>
 
@@ -277,12 +379,9 @@
           <input id="projectName" type="text" placeholder="auto-derived" style="width:180px">
         </div>
         <div class="field">
-          <label>Model</label>
-          <select id="modelSelect">
-            <option value="heavy">heavy (26B)</option>
-            <option value="fast">fast (E4B)</option>
-            <option value="gemma3">gemma3 (27B)</option>
-          </select>
+          <label>Model <button class="btn" onclick="openModelsModal()"
+            style="padding:1px 5px;font-size:9px;margin-left:4px">manage</button></label>
+          <select id="modelSelect"></select>
         </div>
         <div class="field">
           <label>Rounds</label>
@@ -303,6 +402,10 @@
       <div class="form-row actions">
         <button class="btn primary" onclick="runMetaGPT(false)" id="btnNew">+ New Project</button>
         <button class="btn" onclick="runMetaGPT(true)" id="btnInc" disabled>▶ Run Incremental</button>
+        <button class="btn" id="btnBrowse" onclick="browseFiles()"
+                style="display:none;padding:5px 10px">⊞ Files</button>
+        <button class="btn" id="btnDownload" onclick="downloadProject()"
+                style="display:none;padding:5px 10px">↓ ZIP</button>
         <div class="selected-label" id="selectedLabel" style="display:none">
           Selected: <span id="selectedName"></span>
         </div>
@@ -310,21 +413,90 @@
       </div>
     </div>
 
-    <div class="log-header">
-      <span>Live Output</span>
-      <div class="log-status">
-        <div class="log-dot" id="logDot"></div>
-        <span id="logStatusText">idle</span>
-        <button class="btn" onclick="clearLog()" style="padding:2px 8px;font-size:10px;margin-left:8px">clear</button>
+    <!-- Pipeline progress strip (populated by resetPipeline(), grows dynamically per round) -->
+    <div id="pipelineStrip" style="display:flex;align-items:center;flex-shrink:0;border-bottom:1px solid var(--border);padding:6px 16px;background:var(--surface);gap:2px;overflow-x:auto"></div>
+
+    <!-- Log view -->
+    <div id="viewLog" style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+      <div class="log-header">
+        <span>Live Output</span>
+        <div class="log-status">
+          <div class="log-dot" id="logDot"></div>
+          <span id="logStatusText">idle</span>
+          <button class="btn" onclick="clearLog()" style="padding:2px 8px;font-size:10px;margin-left:8px">clear</button>
+          <button class="btn danger" id="btnCancel" onclick="cancelRun()"
+                  style="display:none;padding:2px 8px;font-size:10px">✕ cancel</button>
+        </div>
+      </div>
+      <div class="log-output" id="logOutput">Ready. Select a project or enter a new idea above.
+</div>
+    </div>
+
+    <!-- File browser view -->
+    <div id="viewBrowser" style="display:none;flex-direction:column;flex:1;overflow:hidden">
+      <div class="log-header">
+        <span id="browserTitle">Files</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn" onclick="downloadProject()" style="padding:2px 8px;font-size:10px">↓ ZIP</button>
+          <button class="btn" onclick="showView('log')" style="padding:2px 8px;font-size:10px">← log</button>
+        </div>
+      </div>
+      <div style="display:flex;flex:1;overflow:hidden">
+        <div id="fileTree"></div>
+        <div id="fileViewer"><span style="color:var(--muted)">Select a file.</span></div>
       </div>
     </div>
-    <div class="log-output" id="logOutput">Ready. Select a project or enter a new idea above.\n</div>
   </div>
 </main>
 
+<!-- Summary modal -->
+<div id="summaryModal" class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">Summary: <span id="summaryTitle"></span></span>
+      <button class="btn" onclick="document.getElementById('summaryModal').style.display='none'">✕ close</button>
+    </div>
+    <div id="summaryContent"></div>
+  </div>
+</div>
+
+<!-- Models modal -->
+<div id="modelsModal" class="modal-overlay" style="max-width:600px;margin:0 auto">
+  <div class="modal-box" style="max-width:600px">
+    <div class="modal-header">
+      <span class="modal-title">Manage Models</span>
+      <button class="btn" onclick="closeModelsModal()">✕ close</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Alias</th>
+        <th>Model ID</th>
+        <th style="width:50px"></th>
+      </tr></thead>
+      <tbody id="modelsTableBody"></tbody>
+    </table>
+    <div style="display:flex;gap:8px;align-items:flex-end;margin-top:16px">
+      <div class="field" style="flex:1">
+        <label>Alias</label>
+        <input id="newAlias" type="text" placeholder="e.g. fast2">
+      </div>
+      <div class="field" style="flex:2">
+        <label>Model ID</label>
+        <input id="newModelId" type="text" placeholder="e.g. openai/model-name">
+      </div>
+      <button class="btn primary" onclick="addModel()">Add</button>
+    </div>
+  </div>
+</div>
+
 <script>
+mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+let _mmdCounter = 0;
+
 let selectedProject = null;
 let currentES = null;
+let currentRunId = null;
+let sidebarTab = 'projects';
 
 // ── Container ─────────────────────────────────────────────────────────────────
 
@@ -358,6 +530,22 @@ function confirmRemove() {
   containerAction('remove');
 }
 
+// ── Sidebar tabs ──────────────────────────────────────────────────────────────
+
+function switchSidebarTab(tab) {
+  sidebarTab = tab;
+  document.getElementById('projectList').style.display = tab === 'projects' ? '' : 'none';
+  document.getElementById('logList').style.display = tab === 'logs' ? '' : 'none';
+  document.getElementById('tabProjects').className = 'btn' + (tab === 'projects' ? ' primary' : '');
+  document.getElementById('tabLogs').className = 'btn' + (tab === 'logs' ? ' primary' : '');
+  if (tab === 'logs') loadLogs();
+}
+
+function refreshSidebar() {
+  if (sidebarTab === 'projects') loadProjects();
+  else loadLogs();
+}
+
 // ── Projects ──────────────────────────────────────────────────────────────────
 
 async function loadProjects() {
@@ -377,7 +565,11 @@ async function loadProjects() {
     const date = new Date(p.modified * 1000).toLocaleDateString();
     const incTag = p.incremental ? '<span class="tag inc">inc</span>' : '';
     item.innerHTML = `
-      <div class="pname">${p.name}${incTag}</div>
+      <div class="pname" style="display:flex;align-items:center;gap:4px">
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${escHtml(p.name)}${incTag}</span>
+        <button class="del-btn btn danger" onclick="deleteProject(event,'${escHtml(p.name)}')"
+                style="padding:1px 5px;font-size:10px;flex-shrink:0">✕</button>
+      </div>
       <div class="pmeta">${date} · ${p.file_count} files${p.snippet ? ' · ' + escHtml(p.snippet.slice(0, 40)) : ''}</div>
     `;
     item.onclick = () => selectProject(p.name);
@@ -392,6 +584,9 @@ function selectProject(name) {
   document.getElementById('selectedLabel').style.display = '';
   document.getElementById('btnClear').style.display = '';
   document.getElementById('btnInc').disabled = false;
+  document.getElementById('btnBrowse').style.display = '';
+  document.getElementById('btnDownload').style.display = '';
+  document.getElementById('btnSummary').style.display = '';
   document.querySelectorAll('.project-item').forEach(el => {
     el.classList.toggle('selected', el.dataset.name === name);
   });
@@ -403,10 +598,299 @@ function clearSelection() {
   document.getElementById('selectedLabel').style.display = 'none';
   document.getElementById('btnClear').style.display = 'none';
   document.getElementById('btnInc').disabled = true;
+  document.getElementById('btnBrowse').style.display = 'none';
+  document.getElementById('btnDownload').style.display = 'none';
+  document.getElementById('btnSummary').style.display = 'none';
   document.querySelectorAll('.project-item').forEach(el => el.classList.remove('selected'));
 }
 
+async function deleteProject(e, name) {
+  e.stopPropagation();
+  if (!confirm(`Delete project "${name}"?\n\nThis permanently removes all generated files.`)) return;
+  const r = await fetch(`/api/projects/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (!r.ok) {
+    const err = await r.json();
+    alert(`Delete failed: ${err.detail}`);
+    return;
+  }
+  if (selectedProject === name) clearSelection();
+  loadProjects();
+}
+
+// ── Artifacts summary ─────────────────────────────────────────────────────────
+
+async function showSummary() {
+  if (!selectedProject) return;
+  document.getElementById('summaryTitle').textContent = selectedProject;
+  document.getElementById('summaryContent').innerHTML = '<div style="color:var(--muted);padding:8px">Loading...</div>';
+  document.getElementById('summaryModal').style.display = '';
+  const r = await fetch(`/api/projects/${encodeURIComponent(selectedProject)}/summary`);
+  if (!r.ok) {
+    document.getElementById('summaryContent').innerHTML = '<div style="color:var(--red)">Failed to load summary.</div>';
+    return;
+  }
+  const data = await r.json();
+  document.getElementById('summaryContent').innerHTML = renderSummary(data);
+}
+
+function renderSummary(data) {
+  const sections = [
+    ['Product Manager', data.prd, ['Project Name', 'Refined Requirements', 'Refined User Stories']],
+    ['Architect', data.system_design, ['Refined Data structures and interfaces', 'Refined File list']],
+    ['Project Manager', data.task, ['Required packages', 'Refined Task list']],
+    ['Engineer', data.code_plan, ['Development Plan', 'Incremental Change']],
+  ];
+  return sections.map(([title, obj, fields]) => {
+    if (!obj) return `<div class="summary-card"><div class="summary-card-title">${title}</div><div style="color:var(--muted);font-size:11px">No data yet.</div></div>`;
+    const fieldHtml = fields.map(f => {
+      const val = obj[f];
+      if (!val) return '';
+      const display = Array.isArray(val) ? val.join('\n') : String(val);
+      return `<div class="summary-field-label">${escHtml(f)}</div>
+              <div class="summary-field-value">${escHtml(display.slice(0, 1200))}</div>`;
+    }).join('');
+    return `<div class="summary-card"><div class="summary-card-title">${title}</div>${fieldHtml}</div>`;
+  }).join('');
+}
+
+// ── File browser ──────────────────────────────────────────────────────────────
+
+function showView(name) {
+  document.getElementById('viewLog').style.display = name === 'log' ? 'flex' : 'none';
+  document.getElementById('viewBrowser').style.display = name === 'browser' ? 'flex' : 'none';
+}
+
+async function browseFiles() {
+  if (!selectedProject) return;
+  document.getElementById('browserTitle').textContent = `Files — ${selectedProject}`;
+  document.getElementById('fileTree').innerHTML = '<div style="padding:8px;color:var(--muted)">Loading...</div>';
+  document.getElementById('fileViewer').innerHTML = '<span style="color:var(--muted)">Select a file.</span>';
+  showView('browser');
+  const r = await fetch(`/api/projects/${encodeURIComponent(selectedProject)}/files`);
+  if (!r.ok) {
+    document.getElementById('fileTree').innerHTML = '<div style="padding:8px;color:var(--red)">Failed to load files.</div>';
+    return;
+  }
+  const files = await r.json();
+  renderFileTree(files);
+}
+
+function renderFileTree(files) {
+  const tree = document.getElementById('fileTree');
+  tree.innerHTML = '';
+  for (const f of files) {
+    const el = document.createElement('div');
+    el.className = 'tree-item';
+    el.textContent = f.path;
+    el.title = `${f.path} (${f.size.toLocaleString()} bytes)`;
+    el.onclick = () => loadFile(f.path, el);
+    tree.appendChild(el);
+  }
+}
+
+async function loadFile(relPath, el) {
+  document.querySelectorAll('.tree-item').forEach(d => d.classList.remove('selected'));
+  el.classList.add('selected');
+  const viewer = document.getElementById('fileViewer');
+  viewer.innerHTML = '<span style="color:var(--muted)">Loading...</span>';
+  const r = await fetch(`/api/projects/${encodeURIComponent(selectedProject)}/file?path=${encodeURIComponent(relPath)}`);
+  if (!r.ok) { viewer.textContent = 'Failed to load file.'; return; }
+  const data = await r.json();
+  viewer.innerHTML = '';
+  if (data.binary) {
+    const p = document.createElement('div');
+    p.style.cssText = 'color:var(--muted);padding:8px';
+    p.textContent = `[${data.message}]`;
+    viewer.appendChild(p);
+    return;
+  }
+  if (relPath.endsWith('.mmd')) {
+    renderMmdFile(data.content, viewer);
+  } else if (relPath.endsWith('.md')) {
+    renderMdFile(data.content, viewer);
+  } else {
+    const pre = document.createElement('pre');
+    pre.textContent = data.content;
+    viewer.appendChild(pre);
+  }
+}
+
+// ── Mermaid rendering ─────────────────────────────────────────────────────────
+
+function renderMmdFile(content, container) {
+  container.innerHTML = '';
+  const toggle = document.createElement('div');
+  toggle.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+  const rawBtn = document.createElement('button');
+  rawBtn.className = 'btn'; rawBtn.textContent = 'Raw';
+  const renderBtn = document.createElement('button');
+  renderBtn.className = 'btn primary'; renderBtn.textContent = 'Rendered';
+  toggle.appendChild(rawBtn); toggle.appendChild(renderBtn);
+  container.appendChild(toggle);
+
+  const rawView = document.createElement('pre');
+  rawView.textContent = content;
+  rawView.style.display = 'none';
+  container.appendChild(rawView);
+
+  const renderView = document.createElement('div');
+  container.appendChild(renderView);
+
+  rawBtn.onclick = () => { rawView.style.display = ''; renderView.style.display = 'none'; };
+  renderBtn.onclick = () => { rawView.style.display = 'none'; renderView.style.display = ''; };
+
+  const id = `mmd-${++_mmdCounter}`;
+  mermaid.render(id, content).then(({ svg }) => {
+    renderView.innerHTML = svg;
+  }).catch(err => {
+    renderView.textContent = `Render error: ${err.message}`;
+  });
+}
+
+function renderMdFile(content, container) {
+  container.innerHTML = '';
+  const parts = content.split(/(```mermaid[\s\S]*?```)/g);
+  for (const part of parts) {
+    if (part.startsWith('```mermaid')) {
+      const code = part.replace(/^```mermaid\s*/, '').replace(/```$/, '').trim();
+      const div = document.createElement('div');
+      div.style.cssText = 'margin:8px 0;border:1px solid var(--border);border-radius:4px;padding:8px;overflow:auto';
+      const id = `mmd-${++_mmdCounter}`;
+      mermaid.render(id, code).then(({ svg }) => { div.innerHTML = svg; })
+        .catch(err => { div.textContent = `[mermaid error: ${err.message}]`; });
+      container.appendChild(div);
+    } else if (part.trim()) {
+      const pre = document.createElement('pre');
+      pre.textContent = part;
+      container.appendChild(pre);
+    }
+  }
+}
+
+// ── Download ──────────────────────────────────────────────────────────────────
+
+function downloadProject(include = 'source') {
+  if (!selectedProject) return;
+  window.location = `/api/projects/${encodeURIComponent(selectedProject)}/download?include=${include}`;
+}
+
+// ── Run log history ───────────────────────────────────────────────────────────
+
+async function loadLogs() {
+  const list = document.getElementById('logList');
+  list.innerHTML = '<div style="padding:12px;color:var(--muted)">Loading...</div>';
+  const r = await fetch('/api/logs');
+  const logs = await r.json();
+  if (!logs.length) {
+    list.innerHTML = '<div style="padding:12px;color:var(--muted)">No run logs yet.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const log of logs) {
+    const item = document.createElement('div');
+    item.className = 'project-item';
+    item.innerHTML = `
+      <div class="pname">${escHtml(log.project)}</div>
+      <div class="pmeta">${log.timestamp} · ${(log.size / 1024).toFixed(1)} KB
+        <button class="btn" onclick="viewLog('${escHtml(log.filename)}')"
+                style="padding:1px 6px;font-size:10px;margin-left:6px">View</button>
+      </div>
+    `;
+    list.appendChild(item);
+  }
+}
+
+async function viewLog(filename) {
+  showView('log');
+  clearLog();
+  appendLog(`[ui] Loading log: ${filename}\n`, 'meta');
+  const r = await fetch(`/api/logs/${encodeURIComponent(filename)}`);
+  if (!r.ok) { appendLog('[ui] Failed to load log.\n', 'err'); return; }
+  const text = await r.text();
+  clearLog();
+  appendLog(text);
+}
+
+// ── Custom models ─────────────────────────────────────────────────────────────
+
+async function refreshModelSelect() {
+  const r = await fetch('/api/models');
+  const models = await r.json();
+  const sel = document.getElementById('modelSelect');
+  const current = sel.value;
+  sel.innerHTML = '';
+  for (const [alias, modelId] of Object.entries(models)) {
+    const opt = document.createElement('option');
+    opt.value = alias;
+    opt.textContent = `${alias} (${modelId.split('/').pop()})`;
+    sel.appendChild(opt);
+  }
+  if (current && models[current]) sel.value = current;
+}
+
+async function openModelsModal() {
+  document.getElementById('modelsModal').style.display = '';
+  await renderModelsTable();
+}
+
+async function closeModelsModal() {
+  document.getElementById('modelsModal').style.display = 'none';
+  await refreshModelSelect();
+}
+
+async function renderModelsTable() {
+  const r = await fetch('/api/models');
+  const models = await r.json();
+  const tbody = document.getElementById('modelsTableBody');
+  tbody.innerHTML = '';
+  for (const [alias, modelId] of Object.entries(models)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escHtml(alias)}</td>
+      <td style="color:var(--muted)">${escHtml(modelId)}</td>
+      <td><button class="btn danger" onclick="deleteModel('${escHtml(alias)}')"
+              style="padding:1px 6px;font-size:10px">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  }
+}
+
+async function addModel() {
+  const alias = document.getElementById('newAlias').value.trim();
+  const modelId = document.getElementById('newModelId').value.trim();
+  if (!alias || !modelId) { alert('Both alias and model ID are required.'); return; }
+  const r = await fetch('/api/models', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ alias, model_id: modelId }),
+  });
+  if (r.ok) {
+    document.getElementById('newAlias').value = '';
+    document.getElementById('newModelId').value = '';
+    await renderModelsTable();
+  }
+}
+
+async function deleteModel(alias) {
+  if (!confirm(`Delete model alias "${alias}"?`)) return;
+  await fetch(`/api/models/${encodeURIComponent(alias)}`, { method: 'DELETE' });
+  await renderModelsTable();
+}
+
 // ── Run ───────────────────────────────────────────────────────────────────────
+
+const ROLE_PATTERNS = [
+  // Primary: role announcement lines emitted by roles that log _act
+  [/\(Product\s*Manager\):\s*to do/i, 'pm'],
+  [/\(Architect\):\s*to do/i,         'arch'],
+  [/\(Project\s*Manager\):\s*to do/i, 'projmgr'],
+  [/\(Engineer\):\s*to do/i,          'eng'],
+  [/\(QA[^)]*\):\s*to do/i,           'qa'],
+  // Fallback: action-level log lines for roles that skip the _act log (Engineer, QA)
+  [/actions\.write_code(?:_review)?:run/i, 'eng'],
+  [/actions\.write_test:run/i,             'qa'],
+  [/actions\.run_code:run/i,               'qa'],
+];
 
 async function runMetaGPT(incremental) {
   const idea = document.getElementById('ideaInput').value.trim();
@@ -424,6 +908,7 @@ async function runMetaGPT(incremental) {
   }
 
   clearLog();
+  resetPipeline();
   setRunning(true);
 
   const body = { idea, project: project || selectedProject || '', model, rounds, code_review: codeReview, run_tests: runTests };
@@ -435,16 +920,21 @@ async function runMetaGPT(incremental) {
     return;
   }
   const { run_id, project: resolvedProject } = await r.json();
+  currentRunId = run_id;
   appendLog(`[ui] Run started → project: ${resolvedProject}\n`, 'meta');
 
   if (currentES) currentES.close();
   currentES = new EventSource(`/api/stream/${run_id}`);
   currentES.onmessage = (e) => {
     if (e.data === '[DONE]') {
+      completePipeline();
       setRunning(false);
       currentES.close();
       loadProjects();
       return;
+    }
+    for (const [pat, role] of ROLE_PATTERNS) {
+      if (pat.test(e.data)) activatePipeStep(role);
     }
     appendLog(e.data + '\n');
   };
@@ -453,6 +943,86 @@ async function runMetaGPT(incremental) {
     setRunning(false);
     currentES.close();
   };
+}
+
+async function cancelRun() {
+  if (!currentRunId) return;
+  const btn = document.getElementById('btnCancel');
+  btn.disabled = true;
+  btn.textContent = 'cancelling...';
+  await fetch(`/api/run/${currentRunId}/cancel`, { method: 'POST' });
+  appendLog('[ui] Cancel requested.\n', 'warn');
+}
+
+// ── Pipeline ──────────────────────────────────────────────────────────────────
+
+const ROLE_ORDER  = ['pm', 'arch', 'projmgr', 'eng', 'qa'];
+const ROLE_LABELS = { pm: 'PM', arch: 'Architect', projmgr: 'ProjMgr', eng: 'Engineer', qa: 'QA' };
+let _pipeRound = 1;
+let _pipeLastIdx = -1; // highest role index activated in the current round
+
+function _appendPipeRound(round) {
+  const strip = document.getElementById('pipelineStrip');
+  if (round > 1) {
+    const sep = document.createElement('div');
+    sep.style.cssText = 'padding:2px 8px;color:var(--accent2);font-size:10px;white-space:nowrap;flex-shrink:0';
+    sep.textContent = `r${round}`;
+    strip.appendChild(sep);
+  }
+  ROLE_ORDER.forEach((role, i) => {
+    if (i > 0) {
+      const arrow = document.createElement('div');
+      arrow.className = 'pipe-arrow';
+      arrow.textContent = '→';
+      strip.appendChild(arrow);
+    }
+    const step = document.createElement('div');
+    step.className = 'pipe-step';
+    step.dataset.role = role;
+    step.dataset.round = round;
+    strip.appendChild(step);
+    step.textContent = ROLE_LABELS[role];
+  });
+}
+
+function activatePipeStep(role) {
+  const roleIdx = ROLE_ORDER.indexOf(role);
+  if (roleIdx === -1) return;
+
+  // Role fires strictly before the last seen position → sequence went backward, new round
+  if (roleIdx < _pipeLastIdx) {
+    // Mark remaining steps of the finished round as done
+    document.querySelectorAll(`.pipe-step[data-round="${_pipeRound}"]`).forEach(s => {
+      s.classList.remove('active');
+      s.classList.add('done');
+    });
+    _pipeRound++;
+    _pipeLastIdx = -1;
+    _appendPipeRound(_pipeRound);
+    document.getElementById('pipelineStrip').scrollLeft = 999999;
+  }
+
+  // Update steps within the current round
+  document.querySelectorAll(`.pipe-step[data-round="${_pipeRound}"]`).forEach(s => {
+    const sIdx = ROLE_ORDER.indexOf(s.dataset.role);
+    if (sIdx < roleIdx)      { s.classList.remove('active'); s.classList.add('done'); }
+    else if (sIdx === roleIdx) { s.classList.add('active');   s.classList.remove('done'); }
+  });
+  _pipeLastIdx = roleIdx;
+}
+
+function completePipeline() {
+  document.querySelectorAll(`.pipe-step[data-round="${_pipeRound}"]`).forEach(s => {
+    s.classList.remove('active');
+    s.classList.add('done');
+  });
+}
+
+function resetPipeline() {
+  _pipeRound = 1;
+  _pipeLastIdx = -1;
+  document.getElementById('pipelineStrip').innerHTML = '';
+  _appendPipeRound(1);
 }
 
 // ── Log helpers ───────────────────────────────────────────────────────────────
@@ -468,6 +1038,7 @@ function appendLog(text, cls) {
 
 function clearLog() {
   document.getElementById('logOutput').textContent = '';
+  resetPipeline();
 }
 
 function setRunning(active) {
@@ -476,6 +1047,10 @@ function setRunning(active) {
   document.getElementById('logStatusText').textContent = active ? 'running...' : 'idle';
   document.getElementById('btnNew').disabled = active;
   document.getElementById('btnInc').disabled = active || !selectedProject;
+  document.getElementById('btnCancel').style.display = active ? '' : 'none';
+  document.getElementById('btnCancel').disabled = false;
+  document.getElementById('btnCancel').textContent = '✕ cancel';
+  if (!active) currentRunId = null;
 }
 
 function escHtml(s) {
@@ -487,6 +1062,8 @@ function escHtml(s) {
 pollContainer();
 setInterval(pollContainer, 5000);
 loadProjects();
+refreshModelSelect();
+resetPipeline();
 </script>
 </body>
 </html>

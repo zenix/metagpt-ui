@@ -1,12 +1,17 @@
 import asyncio
+import io
 import json
 import os
+import re
+import shutil
 import subprocess
 import uuid
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -19,15 +24,54 @@ CONFIG_HOST = Path.home() / ".metagpt" / "config2.yaml"
 METAGPT_DIR_HOST = Path.home() / ".metagpt"
 METAGPT_DIR_CTR = "/root/.metagpt"
 IMAGE = "metagpt/metagpt:latest"
+LOGS_DIR = WORKSPACE_HOST / ".logs"
+UI_MODELS_PATH = METAGPT_DIR_HOST / "ui_models.json"
 
 MODEL_IDS = {
+    "qwen3-14b": "openai/qwen/qwen3-14b",
     "heavy": "openai/google/gemma-4-26b-a4b",
     "fast": "openai/google/gemma-4-e4b-it",
     "gemma3": "google/gemma-3-27b-it-qat",
 }
 
+SOURCE_EXTS = {".py", ".js", ".ts", ".html", ".css", ".json", ".md",
+               ".txt", ".mmd", ".yaml", ".toml"}
+
 _config_lock = asyncio.Lock()
 _runs: dict[str, asyncio.Queue] = {}
+_run_procs: dict[str, asyncio.subprocess.Process] = {}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _guard_project(name: str) -> Path:
+    if not name or "/" in name or ".." in name or "\x00" in name:
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    path = (WORKSPACE_HOST / name).resolve()
+    workspace = WORKSPACE_HOST.resolve()
+    if not (path == workspace or workspace in path.parents):
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Project not found")
+    return path
+
+
+def _guard_file_path(project_path: Path, rel: str) -> Path:
+    if not rel or ".." in rel:
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    p = (project_path / rel).resolve()
+    if project_path.resolve() not in p.parents and p != project_path.resolve():
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+    return p
+
+
+def _load_models() -> dict[str, str]:
+    try:
+        if UI_MODELS_PATH.exists():
+            return json.loads(UI_MODELS_PATH.read_text())
+    except Exception:
+        pass
+    return dict(MODEL_IDS)
 
 
 # ── Static files ─────────────────────────────────────────────────────────────
@@ -45,7 +89,7 @@ async def list_projects():
         return []
     projects = []
     for d in sorted(WORKSPACE_HOST.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if not d.is_dir():
+        if not d.is_dir() or d.name.startswith("."):
             continue
         src_count = sum(
             1 for _ in d.rglob("*")
@@ -67,6 +111,128 @@ async def list_projects():
             "incremental": incremental,
         })
     return projects
+
+
+@app.delete("/api/projects/{project_name}")
+async def delete_project(project_name: str):
+    path = _guard_project(project_name)
+    info = _container_status()
+    if info["running"]:
+        ctr_path = f"{WORKSPACE_CTR}/{project_name}"
+        result = subprocess.run(
+            ["docker", "exec", CONTAINER_NAME, "rm", "-rf", ctr_path],
+            stderr=subprocess.PIPE,
+        )
+        if result.returncode != 0:
+            raise HTTPException(status_code=500,
+                detail=f"Container delete failed: {result.stderr.decode()}")
+    else:
+        try:
+            shutil.rmtree(path)
+        except PermissionError as e:
+            raise HTTPException(status_code=500,
+                detail=f"Permission denied (files are root-owned — start container first): {e}")
+    return {"ok": True}
+
+
+@app.get("/api/projects/{project_name}/summary")
+async def project_summary(project_name: str):
+    path = _guard_project(project_name)
+
+    def _newest_json(subdir: str):
+        d = path / "docs" / subdir
+        if not d.exists():
+            return None
+        files = sorted(d.glob("*.json"))
+        if not files:
+            return None
+        try:
+            return json.loads(files[-1].read_text())
+        except Exception:
+            return None
+
+    prd  = _newest_json("prd")
+    sd   = _newest_json("system_design")
+    task = _newest_json("task")
+    cp   = _newest_json("code_plan_and_change")
+
+    return {
+        "prd": {
+            "Project Name": prd.get("Project Name"),
+            "Refined Requirements": prd.get("Refined Requirements"),
+            "Refined User Stories": prd.get("Refined User Stories"),
+        } if prd else None,
+        "system_design": {
+            "Refined Data structures and interfaces": sd.get("Refined Data structures and interfaces"),
+            "Refined File list": sd.get("Refined File list"),
+        } if sd else None,
+        "task": {
+            "Required packages": task.get("Required packages"),
+            "Refined Task list": task.get("Refined Task list"),
+        } if task else None,
+        "code_plan": {
+            "Development Plan": cp.get("Development Plan"),
+            "Incremental Change": cp.get("Incremental Change"),
+        } if cp else None,
+    }
+
+
+@app.get("/api/projects/{project_name}/files")
+async def list_project_files(project_name: str):
+    path = _guard_project(project_name)
+    result = []
+    for f in sorted(path.rglob("*")):
+        if not f.is_file() or ".git" in f.parts:
+            continue
+        try:
+            result.append({
+                "path": str(f.relative_to(path)),
+                "size": f.stat().st_size,
+                "ext": f.suffix.lower(),
+            })
+        except Exception:
+            continue
+    return result
+
+
+@app.get("/api/projects/{project_name}/file")
+async def get_project_file(project_name: str, rel_path: str = Query(..., alias="path")):
+    proj_path = _guard_project(project_name)
+    fp = _guard_file_path(proj_path, rel_path)
+    if not fp.exists() or not fp.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    size = fp.stat().st_size
+    if size > 1_000_000:
+        return {"path": rel_path, "binary": True, "size": size,
+                "message": f"File too large ({size:,} bytes)"}
+    try:
+        content = fp.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return {"path": rel_path, "binary": True, "size": size,
+                "message": f"Binary file ({size:,} bytes)"}
+    return {"path": rel_path, "content": content, "size": size}
+
+
+@app.get("/api/projects/{project_name}/download")
+async def download_project(project_name: str, include: str = "source"):
+    path = _guard_project(project_name)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(path.rglob("*")):
+            if not f.is_file() or ".git" in f.parts:
+                continue
+            if include == "source" and f.suffix.lower() not in SOURCE_EXTS:
+                continue
+            try:
+                zf.write(f, str(f.relative_to(path.parent)))
+            except Exception:
+                continue
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{project_name}.zip"'},
+    )
 
 
 # ── Container ─────────────────────────────────────────────────────────────────
@@ -141,6 +307,68 @@ async def container_remove():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Logs ──────────────────────────────────────────────────────────────────────
+
+@app.get("/api/logs")
+async def list_logs():
+    if not LOGS_DIR.exists():
+        return []
+    logs = []
+    for f in sorted(LOGS_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        parts = f.stem.rsplit("_", 2)
+        logs.append({
+            "filename": f.name,
+            "project": parts[0] if len(parts) >= 3 else f.stem,
+            "timestamp": parts[2] if len(parts) >= 3 else "",
+            "size": f.stat().st_size,
+        })
+    return logs
+
+
+@app.get("/api/logs/{filename}")
+async def get_log(filename: str):
+    if "/" in filename or ".." in filename or not filename.endswith(".log"):
+        raise HTTPException(status_code=400, detail="Invalid log filename")
+    p = LOGS_DIR / filename
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Log not found")
+    return StreamingResponse(open(p, "rb"), media_type="text/plain; charset=utf-8")
+
+
+# ── Models ────────────────────────────────────────────────────────────────────
+
+class ModelRequest(BaseModel):
+    alias: str
+    model_id: str
+
+
+@app.get("/api/models")
+async def list_models():
+    return _load_models()
+
+
+@app.post("/api/models")
+async def add_model(req: ModelRequest):
+    if not req.alias or not req.model_id:
+        raise HTTPException(status_code=400, detail="alias and model_id required")
+    models = _load_models()
+    models[req.alias] = req.model_id
+    UI_MODELS_PATH.write_text(json.dumps(models, indent=2))
+    return {"ok": True, "models": models}
+
+
+@app.delete("/api/models/{alias}")
+async def remove_model(alias: str):
+    if not UI_MODELS_PATH.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+    models = json.loads(UI_MODELS_PATH.read_text())
+    if alias not in models:
+        raise HTTPException(status_code=404, detail="Model not found")
+    del models[alias]
+    UI_MODELS_PATH.write_text(json.dumps(models, indent=2))
+    return {"ok": True, "models": models}
+
+
 # ── Run ───────────────────────────────────────────────────────────────────────
 
 class RunRequest(BaseModel):
@@ -173,27 +401,43 @@ mermaid:
 
 
 def _derive_project_name(idea: str) -> str:
-    import re
     words = re.findall(r'\w+', idea.lower())[:4]
     return "_".join(words)
 
 
 @app.post("/api/run")
 async def start_run(req: RunRequest):
-    if req.model not in MODEL_IDS:
+    models = _load_models()
+    if req.model not in models:
         raise HTTPException(status_code=400, detail=f"Unknown model alias: {req.model}")
 
     project = req.project or _derive_project_name(req.idea)
-    model_id = MODEL_IDS[req.model]
+    model_id = models[req.model]
     run_id = str(uuid.uuid4())
     queue: asyncio.Queue[str | None] = asyncio.Queue()
     _runs[run_id] = queue
 
-    asyncio.create_task(_execute_run(req, project, model_id, queue))
+    asyncio.create_task(_execute_run(req, project, model_id, run_id, queue))
     return {"run_id": run_id, "project": project}
 
 
-async def _execute_run(req: RunRequest, project: str, model_id: str, queue: asyncio.Queue):
+@app.post("/api/run/{run_id}/cancel")
+async def cancel_run(run_id: str):
+    proc = _run_procs.get(run_id)
+    if proc is None:
+        raise HTTPException(status_code=404, detail="Run not found or already finished")
+    try:
+        proc.kill()
+    except ProcessLookupError:
+        pass
+    subprocess.run(
+        ["docker", "exec", CONTAINER_NAME, "pkill", "-f", "metagpt"],
+        stderr=subprocess.DEVNULL,
+    )
+    return {"ok": True}
+
+
+async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str, queue: asyncio.Queue):
     project_host = WORKSPACE_HOST / project
     project_ctr = f"{WORKSPACE_CTR}/{project}"
 
@@ -206,23 +450,41 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, queue: asyn
         cmd_parts.append("--run-tests")
     if project_host.exists() and (project_host / ".dependencies.json").exists():
         cmd_parts += ["--project-path", project_ctr]
-        await queue.put("[metagpt-ui] Existing project — incremental mode\n")
-    else:
-        await queue.put("[metagpt-ui] New project — fresh mode\n")
 
     cmd_parts.append(req.idea)
     bash_cmd = " ".join(f'"{p}"' if " " in p else p for p in cmd_parts)
 
+    # Set up log file
+    try:
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        safe_project = re.sub(r'[^\w-]', '_', project)
+        timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        log_filename = f"{safe_project}_{run_id[:8]}_{timestamp}.log"
+        lf = open(LOGS_DIR / log_filename, "w", encoding="utf-8")
+    except OSError:
+        lf = None
+
+    async def enqueue(msg: str):
+        await queue.put(msg)
+        if lf is not None:
+            lf.write(msg)
+            lf.flush()
+
     original_config = CONFIG_HOST.read_text()
     try:
+        if project_host.exists() and (project_host / ".dependencies.json").exists():
+            await enqueue("[metagpt-ui] Existing project — incremental mode\n")
+        else:
+            await enqueue("[metagpt-ui] New project — fresh mode\n")
+
         async with _config_lock:
             _write_config(model_id)
-            await queue.put(f"[metagpt-ui] Model set to: {req.model} ({model_id})\n")
+            await enqueue(f"[metagpt-ui] Model set to: {req.model} ({model_id})\n")
 
         # Ensure container running
         info = _container_status()
         if not info["running"]:
-            await queue.put("[metagpt-ui] Starting container...\n")
+            await enqueue("[metagpt-ui] Starting container...\n")
             if info["exists"]:
                 subprocess.run(["docker", "start", CONTAINER_NAME], check=True)
             else:
@@ -236,23 +498,27 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, queue: asyn
                 ], check=True)
             await asyncio.sleep(2)
 
-        await queue.put(f"[metagpt-ui] Running: {bash_cmd}\n\n")
+        await enqueue(f"[metagpt-ui] Running: {bash_cmd}\n\n")
 
         proc = await asyncio.create_subprocess_exec(
             "docker", "exec", CONTAINER_NAME, "bash", "-c", bash_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
+        _run_procs[run_id] = proc
         assert proc.stdout is not None
         async for line in proc.stdout:
-            await queue.put(line.decode("utf-8", errors="replace"))
+            await enqueue(line.decode("utf-8", errors="replace"))
 
         await proc.wait()
-        await queue.put(f"\n[metagpt-ui] Process exited with code {proc.returncode}\n")
+        await enqueue(f"\n[metagpt-ui] Process exited with code {proc.returncode}\n")
     except Exception as e:
         await queue.put(f"\n[metagpt-ui] ERROR: {e}\n")
     finally:
         CONFIG_HOST.write_text(original_config)
+        _run_procs.pop(run_id, None)
+        if lf is not None:
+            lf.close()
         await queue.put(None)  # sentinel — stream done
 
 

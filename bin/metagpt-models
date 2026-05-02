@@ -13,6 +13,7 @@ import sys, json
 data = json.load(sys.stdin)
 models = data.get('data', [])
 aliases = {
+    'qwen/qwen3-14b': 'qwen3-14b',
     'gemma-4-26b-a4b': 'heavy',
     'gemma-4-e4b-it':  'fast',
     'gemma-3-27b-it-qat': 'gemma3',
