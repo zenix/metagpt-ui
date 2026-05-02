@@ -26,11 +26,26 @@ METAGPT_DIR_CTR="/root/.metagpt"
 CONFIG_LOCK="${HOME}/.metagpt/.run.lock"
 IMAGE="metagpt/metagpt:latest"
 
-declare -A MODEL_IDS=(
-    [heavy]="openai/google/gemma-4-26b-a4b"
-    [fast]="openai/google/gemma-4-e4b-it"
-    [gemma3]="google/gemma-3-27b-it-qat"
-)
+UI_MODELS_FILE="${HOME}/.metagpt/ui_models.json"
+
+# Load model aliases from ui_models.json if it exists, otherwise use defaults
+declare -A MODEL_IDS
+if [[ -f "$UI_MODELS_FILE" ]]; then
+    while IFS="=" read -r alias model_id; do
+        MODEL_IDS["$alias"]="$model_id"
+    done < <(python3 -c "
+import json, sys
+d = json.load(open('$UI_MODELS_FILE'))
+for k, v in d.items(): print(f'{k}={v}')
+")
+else
+    MODEL_IDS=(
+        [qwen3-14b]="openai/qwen/qwen3-14b"
+        [heavy]="openai/google/gemma-4-26b-a4b"
+        [fast]="openai/google/gemma-4-e4b-it"
+        [gemma3]="google/gemma-3-27b-it-qat"
+    )
+fi
 
 die()   { echo "[metagpt-run] ERROR: $*" >&2; exit 1; }
 info()  { echo "[metagpt-run] $*"; }
@@ -88,7 +103,7 @@ fi
 [[ -z "$IDEA" ]] && die "No idea/prompt provided. Use: metagpt-run [OPTIONS] \"Your idea\""
 
 if [[ -z "${MODEL_IDS[$MODEL_ALIAS]+_}" ]]; then
-    die "Unknown model alias '${MODEL_ALIAS}'. Available: ${!MODEL_IDS[*]}"
+    die "Unknown model alias '${MODEL_ALIAS}'. Available: ${!MODEL_IDS[*]}"$'\n'"       (edit via web UI → Model → Manage, or ${UI_MODELS_FILE})"
 fi
 MODEL_ID="${MODEL_IDS[$MODEL_ALIAS]}"
 

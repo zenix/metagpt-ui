@@ -3,30 +3,44 @@
 set -euo pipefail
 
 LM_STUDIO_URL="${LM_STUDIO_URL:-http://localhost:1234/v1}"
+UI_MODELS_FILE="${HOME}/.metagpt/ui_models.json"
 
 echo "=== Models loaded in LM Studio ==="
 response=$(curl -sf "${LM_STUDIO_URL}/models" 2>/dev/null) \
     || { echo "  LM Studio not reachable at ${LM_STUDIO_URL}"; exit 1; }
 
 echo "$response" | python3 -c "
-import sys, json
+import json, sys, os
+
 data = json.load(sys.stdin)
 models = data.get('data', [])
-aliases = {
-    'qwen/qwen3-14b': 'qwen3-14b',
-    'gemma-4-26b-a4b': 'heavy',
-    'gemma-4-e4b-it':  'fast',
-    'gemma-3-27b-it-qat': 'gemma3',
-}
+
+# Load aliases from ui_models.json, fall back to defaults
+ui_models_file = os.path.expanduser('~/.metagpt/ui_models.json')
+if os.path.exists(ui_models_file):
+    try:
+        alias_map = json.loads(open(ui_models_file).read())
+    except Exception:
+        alias_map = {}
+else:
+    alias_map = {
+        'openai/qwen/qwen3-14b':          'qwen3-14b',
+        'openai/google/gemma-4-26b-a4b':  'heavy',
+        'openai/google/gemma-4-e4b-it':   'fast',
+        'google/gemma-3-27b-it-qat':      'gemma3',
+    }
+
+# Build reverse map: fragment of model id -> alias
+reverse = {v: k for k, v in alias_map.items()}
+
 for m in models:
     mid = m['id']
-    alias = next((v for k, v in aliases.items() if k.lower() in mid.lower()), '?')
-    print(f'  {alias:10s}  {mid}')
+    alias = next((a for a, full_id in alias_map.items() if full_id.lower() in mid.lower() or mid.lower() in full_id.lower()), '?')
+    print(f'  {alias:12s}  {mid}')
 if not models:
     print('  (no models loaded)')
 "
 
 echo ""
-echo "Use with: metagpt-run -m fast \"...\""
-echo "           metagpt-run -m heavy \"...\""
-echo "           metagpt-run -m gemma3 \"...\""
+echo "Aliases are loaded from: ${UI_MODELS_FILE}"
+echo "Manage via: web UI → Model → Manage"
