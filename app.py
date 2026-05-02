@@ -38,7 +38,9 @@ SOURCE_EXTS = {".py", ".js", ".ts", ".html", ".css", ".json", ".md",
                ".txt", ".mmd", ".yaml", ".toml"}
 
 _config_lock = asyncio.Lock()
-_runs: dict[str, asyncio.Queue] = {}
+_run_buffers: dict[str, list[str]] = {}   # run_id → all log chunks
+_run_done: dict[str, bool] = {}           # run_id → finished flag
+_run_meta: dict[str, str] = {}            # run_id → project name
 _run_procs: dict[str, asyncio.subprocess.Process] = {}
 
 
@@ -405,6 +407,15 @@ def _derive_project_name(idea: str) -> str:
     return "_".join(words)
 
 
+@app.get("/api/runs")
+async def list_active_runs():
+    return [
+        {"run_id": rid, "project": _run_meta.get(rid, "")}
+        for rid, done in _run_done.items()
+        if not done
+    ]
+
+
 @app.post("/api/run")
 async def start_run(req: RunRequest):
     models = _load_models()
@@ -414,18 +425,19 @@ async def start_run(req: RunRequest):
     project = req.project or _derive_project_name(req.idea)
     model_id = models[req.model]
     run_id = str(uuid.uuid4())
-    queue: asyncio.Queue[str | None] = asyncio.Queue()
-    _runs[run_id] = queue
+    _run_buffers[run_id] = []
+    _run_done[run_id] = False
+    _run_meta[run_id] = project
 
-    asyncio.create_task(_execute_run(req, project, model_id, run_id, queue))
+    asyncio.create_task(_execute_run(req, project, model_id, run_id))
     return {"run_id": run_id, "project": project}
 
 
 @app.post("/api/run/{run_id}/cancel")
 async def cancel_run(run_id: str):
-    proc = _run_procs.get(run_id)
-    if proc is None:
+    if _run_done.get(run_id, True):
         raise HTTPException(status_code=404, detail="Run not found or already finished")
+    proc = _run_procs.get(run_id)
     try:
         proc.kill()
     except ProcessLookupError:
@@ -437,7 +449,7 @@ async def cancel_run(run_id: str):
     return {"ok": True}
 
 
-async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str, queue: asyncio.Queue):
+async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str):
     project_host = WORKSPACE_HOST / project
     project_ctr = f"{WORKSPACE_CTR}/{project}"
 
@@ -464,8 +476,8 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
     except OSError:
         lf = None
 
-    async def enqueue(msg: str):
-        await queue.put(msg)
+    def push(msg: str):
+        _run_buffers[run_id].append(msg)
         if lf is not None:
             lf.write(msg)
             lf.flush()
@@ -473,18 +485,18 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
     original_config = CONFIG_HOST.read_text()
     try:
         if project_host.exists() and (project_host / ".dependencies.json").exists():
-            await enqueue("[metagpt-ui] Existing project — incremental mode\n")
+            push("[metagpt-ui] Existing project — incremental mode\n")
         else:
-            await enqueue("[metagpt-ui] New project — fresh mode\n")
+            push("[metagpt-ui] New project — fresh mode\n")
 
         async with _config_lock:
             _write_config(model_id)
-            await enqueue(f"[metagpt-ui] Model set to: {req.model} ({model_id})\n")
+            push(f"[metagpt-ui] Model set to: {req.model} ({model_id})\n")
 
         # Ensure container running
         info = _container_status()
         if not info["running"]:
-            await enqueue("[metagpt-ui] Starting container...\n")
+            push("[metagpt-ui] Starting container...\n")
             if info["exists"]:
                 subprocess.run(["docker", "start", CONTAINER_NAME], check=True)
             else:
@@ -498,7 +510,7 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
                 ], check=True)
             await asyncio.sleep(2)
 
-        await enqueue(f"[metagpt-ui] Running: {bash_cmd}\n\n")
+        push(f"[metagpt-ui] Running: {bash_cmd}\n\n")
 
         proc = await asyncio.create_subprocess_exec(
             "docker", "exec", CONTAINER_NAME, "bash", "-c", bash_cmd,
@@ -508,39 +520,40 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
         _run_procs[run_id] = proc
         assert proc.stdout is not None
         async for line in proc.stdout:
-            await enqueue(line.decode("utf-8", errors="replace"))
+            push(line.decode("utf-8", errors="replace"))
 
         await proc.wait()
-        await enqueue(f"\n[metagpt-ui] Process exited with code {proc.returncode}\n")
+        push(f"\n[metagpt-ui] Process exited with code {proc.returncode}\n")
     except Exception as e:
-        await queue.put(f"\n[metagpt-ui] ERROR: {e}\n")
+        push(f"\n[metagpt-ui] ERROR: {e}\n")
     finally:
         CONFIG_HOST.write_text(original_config)
         _run_procs.pop(run_id, None)
         if lf is not None:
             lf.close()
-        await queue.put(None)  # sentinel — stream done
+        _run_done[run_id] = True
 
 
 # ── SSE stream ────────────────────────────────────────────────────────────────
 
 @app.get("/api/stream/{run_id}")
 async def stream_run(run_id: str):
-    if run_id not in _runs:
+    if run_id not in _run_buffers:
         raise HTTPException(status_code=404, detail="Run not found")
-    queue = _runs[run_id]
 
     async def event_generator() -> AsyncIterator[str]:
-        try:
-            while True:
-                chunk = await queue.get()
-                if chunk is None:
-                    yield "data: [DONE]\n\n"
-                    break
+        pos = 0
+        while True:
+            buf = _run_buffers[run_id]
+            while pos < len(buf):
+                chunk = buf[pos]
+                pos += 1
                 for line in chunk.splitlines(keepends=True):
                     safe = line.replace("\n", " ").replace("\r", "")
                     yield f"data: {safe}\n\n"
-        finally:
-            _runs.pop(run_id, None)
+            if _run_done.get(run_id, False):
+                yield "data: [DONE]\n\n"
+                break
+            await asyncio.sleep(0.1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

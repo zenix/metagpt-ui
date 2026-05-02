@@ -921,8 +921,14 @@ async function runMetaGPT(incremental) {
   }
   const { run_id, project: resolvedProject } = await r.json();
   currentRunId = run_id;
+  localStorage.setItem('activeRunId', run_id);
+  localStorage.setItem('activeProject', resolvedProject);
   appendLog(`[ui] Run started → project: ${resolvedProject}\n`, 'meta');
 
+  connectStream(run_id);
+}
+
+function connectStream(run_id) {
   if (currentES) currentES.close();
   currentES = new EventSource(`/api/stream/${run_id}`);
   currentES.onmessage = (e) => {
@@ -930,11 +936,18 @@ async function runMetaGPT(incremental) {
       completePipeline();
       setRunning(false);
       currentES.close();
+      localStorage.removeItem('activeRunId');
+      localStorage.removeItem('activeProject');
       loadProjects();
       return;
     }
     for (const [pat, role] of ROLE_PATTERNS) {
       if (pat.test(e.data)) activatePipeStep(role);
+    }
+    if (/actions\.write_code:run/i.test(e.data)) {
+      _engFileCount++;
+      const step = document.querySelector(`.pipe-step[data-role="eng"][data-round="${_pipeRound}"]`);
+      if (step) step.textContent = `Engineer (${_engFileCount})`;
     }
     appendLog(e.data + '\n');
   };
@@ -942,6 +955,8 @@ async function runMetaGPT(incremental) {
     appendLog('[ui] Stream connection lost.\n', 'err');
     setRunning(false);
     currentES.close();
+    localStorage.removeItem('activeRunId');
+    localStorage.removeItem('activeProject');
   };
 }
 
@@ -960,6 +975,7 @@ const ROLE_ORDER  = ['pm', 'arch', 'projmgr', 'eng', 'qa'];
 const ROLE_LABELS = { pm: 'PM', arch: 'Architect', projmgr: 'ProjMgr', eng: 'Engineer', qa: 'QA' };
 let _pipeRound = 1;
 let _pipeLastIdx = -1; // highest role index activated in the current round
+let _engFileCount = 0;
 
 function _appendPipeRound(round) {
   const strip = document.getElementById('pipelineStrip');
@@ -1021,6 +1037,7 @@ function completePipeline() {
 function resetPipeline() {
   _pipeRound = 1;
   _pipeLastIdx = -1;
+  _engFileCount = 0;
   document.getElementById('pipelineStrip').innerHTML = '';
   _appendPipeRound(1);
 }
@@ -1064,6 +1081,25 @@ setInterval(pollContainer, 5000);
 loadProjects();
 refreshModelSelect();
 resetPipeline();
+
+// Reconnect to an active run if the page was refreshed mid-run
+(async () => {
+  const savedRunId = localStorage.getItem('activeRunId');
+  const savedProject = localStorage.getItem('activeProject');
+  if (!savedRunId) return;
+  const r = await fetch('/api/runs');
+  const active = await r.json();
+  if (!active.find(x => x.run_id === savedRunId)) {
+    localStorage.removeItem('activeRunId');
+    localStorage.removeItem('activeProject');
+    return;
+  }
+  currentRunId = savedRunId;
+  if (savedProject) selectProject(savedProject);
+  appendLog('[ui] Reconnected to active run\n', 'meta');
+  setRunning(true);
+  connectStream(savedRunId);
+})();
 </script>
 </body>
 </html>
