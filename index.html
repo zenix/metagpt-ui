@@ -387,7 +387,7 @@
         </div>
         <div class="field">
           <label>Rounds</label>
-          <input id="roundsInput" type="number" value="5" min="1" max="20" style="width:70px">
+          <input id="roundsInput" type="number" value="5" min="1" max="200" style="width:70px">
         </div>
         <div class="field" style="justify-content:flex-end">
           <label>&nbsp;</label>
@@ -499,6 +499,8 @@ let selectedProject = null;
 let currentES = null;
 let currentRunId = null;
 let sidebarTab = 'projects';
+let _streamRetries = 0;
+let _streamDone = false;
 
 // ── Container ─────────────────────────────────────────────────────────────────
 
@@ -932,9 +934,17 @@ async function runMetaGPT(incremental) {
 
 function connectStream(run_id) {
   if (currentES) currentES.close();
+  _streamRetries = 0;
+  _streamDone = false;
   currentES = new EventSource(`/api/stream/${run_id}`);
   currentES.onmessage = (e) => {
+    if (_streamRetries > 0) {
+      _streamRetries = 0;
+      document.getElementById('logStatusText').textContent = 'running...';
+      appendLog('[ui] Stream reconnected.\n', 'meta');
+    }
     if (e.data === '[DONE]') {
+      _streamDone = true;
       completePipeline();
       setRunning(false);
       currentES.close();
@@ -951,14 +961,26 @@ function connectStream(run_id) {
       const step = document.querySelector(`.pipe-step[data-role="eng"][data-round="${_pipeRound}"]`);
       if (step) step.textContent = `Engineer (${_engFileCount})`;
     }
-    appendLog(e.data + '\n');
+    const exitMatch = e.data.match(/Process exited with code (\d+)/);
+    if (exitMatch) {
+      appendLog(e.data + '\n', parseInt(exitMatch[1]) === 0 ? 'ok' : 'err');
+    } else {
+      appendLog(e.data + '\n');
+    }
   };
   currentES.onerror = () => {
-    appendLog('[ui] Stream connection lost.\n', 'err');
-    setRunning(false);
-    currentES.close();
-    localStorage.removeItem('activeRunId');
-    localStorage.removeItem('activeProject');
+    if (_streamDone) return;
+    _streamRetries++;
+    if (_streamRetries > 10) {
+      appendLog('[ui] Stream connection failed after retries.\n', 'err');
+      setRunning(false);
+      currentES.close();
+      localStorage.removeItem('activeRunId');
+      localStorage.removeItem('activeProject');
+      return;
+    }
+    // EventSource auto-reconnects using Last-Event-ID header — no messages missed
+    document.getElementById('logStatusText').textContent = `reconnecting (${_streamRetries})...`;
   };
 }
 

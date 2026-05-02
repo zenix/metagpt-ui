@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import uuid
@@ -11,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import AsyncIterator
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -389,6 +390,8 @@ def _write_config(model_id: str):
   api_key: "lm-studio"
   model: "{model_id}"
   use_system_prompt: true
+  max_token: 8192
+  temperature: 0.0
 
 code_execution:
   backend: "docker"
@@ -464,7 +467,7 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
         cmd_parts += ["--project-path", project_ctr]
 
     cmd_parts.append(req.idea)
-    bash_cmd = " ".join(f'"{p}"' if " " in p else p for p in cmd_parts)
+    bash_cmd = " ".join(shlex.quote(p) for p in cmd_parts)
 
     # Set up log file
     try:
@@ -477,7 +480,8 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
         lf = None
 
     def push(msg: str):
-        _run_buffers[run_id].append(msg)
+        for line in (msg.splitlines(keepends=True) or [msg]):
+            _run_buffers[run_id].append(line)
         if lf is not None:
             lf.write(msg)
             lf.flush()
@@ -537,20 +541,25 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
 # ── SSE stream ────────────────────────────────────────────────────────────────
 
 @app.get("/api/stream/{run_id}")
-async def stream_run(run_id: str):
+async def stream_run(run_id: str, request: Request):
     if run_id not in _run_buffers:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    last_id = request.headers.get("last-event-id", "")
+    try:
+        start = int(last_id) + 1 if last_id else 0
+    except ValueError:
+        start = 0
+
     async def event_generator() -> AsyncIterator[str]:
-        pos = 0
+        pos = start
         while True:
             buf = _run_buffers[run_id]
             while pos < len(buf):
-                chunk = buf[pos]
+                line = buf[pos]
+                safe = line.replace("\n", " ").replace("\r", "")
+                yield f"id: {pos}\ndata: {safe}\n\n"
                 pos += 1
-                for line in chunk.splitlines(keepends=True):
-                    safe = line.replace("\n", " ").replace("\r", "")
-                    yield f"data: {safe}\n\n"
             if _run_done.get(run_id, False):
                 yield "data: [DONE]\n\n"
                 break
