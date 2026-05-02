@@ -379,9 +379,11 @@
           <input id="projectName" type="text" placeholder="auto-derived" style="width:180px">
         </div>
         <div class="field">
-          <label>Model <button class="btn" onclick="openModelsModal()"
-            style="padding:1px 5px;font-size:9px;margin-left:4px">manage</button></label>
-          <select id="modelSelect"></select>
+          <label>Model</label>
+          <div style="display:flex;gap:4px;align-items:center">
+            <select id="modelSelect"></select>
+            <button class="btn" onclick="openModelsModal()" title="Manage models" style="padding:3px 7px;font-size:13px;line-height:1">⚙</button>
+          </div>
         </div>
         <div class="field">
           <label>Rounds</label>
@@ -623,7 +625,7 @@ async function showSummary() {
   if (!selectedProject) return;
   document.getElementById('summaryTitle').textContent = selectedProject;
   document.getElementById('summaryContent').innerHTML = '<div style="color:var(--muted);padding:8px">Loading...</div>';
-  document.getElementById('summaryModal').style.display = '';
+  document.getElementById('summaryModal').style.display = 'block';
   const r = await fetch(`/api/projects/${encodeURIComponent(selectedProject)}/summary`);
   if (!r.ok) {
     document.getElementById('summaryContent').innerHTML = '<div style="color:var(--red)">Failed to load summary.</div>';
@@ -829,7 +831,7 @@ async function refreshModelSelect() {
 }
 
 async function openModelsModal() {
-  document.getElementById('modelsModal').style.display = '';
+  document.getElementById('modelsModal').style.display = 'block';
   await renderModelsTable();
 }
 
