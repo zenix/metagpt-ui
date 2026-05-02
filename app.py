@@ -374,6 +374,12 @@ async def remove_model(alias: str):
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 
+BACKENDS = {
+    "lmstudio": {"base_url": "http://localhost:1234/v1",   "api_key": "lm-studio"},
+    "ollama":   {"base_url": "http://localhost:11434/v1",  "api_key": "ollama"},
+}
+
+
 class RunRequest(BaseModel):
     idea: str
     project: str = ""
@@ -381,13 +387,15 @@ class RunRequest(BaseModel):
     rounds: int = 5
     code_review: bool = True
     run_tests: bool = False
+    backend: str = "lmstudio"
 
 
-def _write_config(model_id: str):
+def _write_config(model_id: str, backend: str = "lmstudio"):
+    b = BACKENDS.get(backend, BACKENDS["lmstudio"])
     CONFIG_HOST.write_text(f"""llm:
   api_type: "openai"
-  base_url: "http://localhost:1234/v1"
-  api_key: "lm-studio"
+  base_url: "{b['base_url']}"
+  api_key: "{b['api_key']}"
   model: "{model_id}"
   use_system_prompt: true
   max_token: 8192
@@ -494,8 +502,8 @@ async def _execute_run(req: RunRequest, project: str, model_id: str, run_id: str
             push("[metagpt-ui] New project — fresh mode\n")
 
         async with _config_lock:
-            _write_config(model_id)
-            push(f"[metagpt-ui] Model set to: {req.model} ({model_id})\n")
+            _write_config(model_id, req.backend)
+            push(f"[metagpt-ui] Backend: {req.backend} | Model: {req.model} ({model_id})\n")
 
         # Ensure container running
         info = _container_status()

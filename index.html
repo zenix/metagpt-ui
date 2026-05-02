@@ -379,6 +379,13 @@
           <input id="projectName" type="text" placeholder="auto-derived" style="width:180px">
         </div>
         <div class="field">
+          <label>Backend</label>
+          <select id="backendSelect">
+            <option value="lmstudio">LM Studio</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
+        <div class="field">
           <label>Model</label>
           <div style="display:flex;gap:4px;align-items:center">
             <select id="modelSelect"></select>
@@ -901,6 +908,7 @@ async function runMetaGPT(incremental) {
   if (!idea) { appendLog('[ui] Enter a prompt first.\n', 'err'); return; }
 
   const project = document.getElementById('projectName').value.trim();
+  const backend = document.getElementById('backendSelect').value;
   const model = document.getElementById('modelSelect').value;
   const rounds = parseInt(document.getElementById('roundsInput').value) || 5;
   const codeReview = document.getElementById('codeReview').checked;
@@ -915,7 +923,7 @@ async function runMetaGPT(incremental) {
   resetPipeline();
   setRunning(true);
 
-  const body = { idea, project: project || selectedProject || '', model, rounds, code_review: codeReview, run_tests: runTests };
+  const body = { idea, project: project || selectedProject || '', model, rounds, code_review: codeReview, run_tests: runTests, backend };
   const r = await fetch('/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   if (!r.ok) {
     const err = await r.text();
@@ -1105,6 +1113,13 @@ setInterval(pollContainer, 5000);
 loadProjects();
 refreshModelSelect();
 resetPipeline();
+
+// Restore backend selection
+const _savedBackend = localStorage.getItem('backend') || 'lmstudio';
+document.getElementById('backendSelect').value = _savedBackend;
+document.getElementById('backendSelect').addEventListener('change', function() {
+  localStorage.setItem('backend', this.value);
+});
 
 // Reconnect to an active run if the page was refreshed mid-run
 (async () => {
